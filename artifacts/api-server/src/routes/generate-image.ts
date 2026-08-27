@@ -62,6 +62,7 @@ function buildLookEditPrompt(
   look: LookRecommendation,
   profile: SkinTuneProfile,
   context: OccasionContext,
+  stylingAddendum?: string | null,
 ): string {
   const parts = [
     `This is a photo of a real specific person. Edit ONLY their clothing, hairstyle, makeup, and background — you must NOT change their face, facial structure, facial features, skin tone, or identity in any way. The exact same face from the input photo must appear in the output, just re-dressed.`,
@@ -76,6 +77,11 @@ function buildLookEditPrompt(
     profile.bodyBuild ? `Preserve their natural build (${profile.bodyBuild}) — do not alter body shape.` : "",
     `The outfit must fit this exact person correctly: the garments should drape, sit, and follow their actual body shape and proportions as if properly tailored for them — correct shoulder line, sleeve and hem length, and natural fabric fall for their build. It should never look pasted on, stretched, floating away from the body, or cut for a different body shape. This should read as clothing that genuinely suits and flatters this specific person, not a generic outfit overlaid on them.`,
     context.details ? `Context: ${context.details}` : "",
+    // Additional photo-specific detail from writeStylingAddendum(), if that
+    // call succeeded — pure addition, never a substitute for the rules
+    // above, which stay present regardless of whether this ran or what it
+    // said.
+    stylingAddendum ? `Additional styling detail for this specific person: ${stylingAddendum}` : "",
     "Natural lighting, tasteful and supportive, no beauty filter, no visible text or watermark. Professional editorial photo quality, magazine-worthy composition, flattering pose and head angle — this should look like a genuinely great photo of this person.",
     "Reminder: keep the same face and identity as the input photo, but with a confident eye-level pose and head angle, and an outfit that fits and suits their actual body correctly — this is a clothing, pose, and styling edit, not a new person and not a literal copy of the original snapshot's camera angle.",
   ];
@@ -88,6 +94,65 @@ function decodeDataUrl(dataUrl: string): { mime: string; buffer: Buffer } {
   if (!match) throw new Error("photoUrl is not a valid base64 data URL");
   const [, mime, base64] = match;
   return { mime, buffer: Buffer.from(base64, "base64") };
+}
+
+/**
+ * Prompt-writing agent: a GPT-4o vision call that looks at the user's
+ * ACTUAL photo (their real proportions, framing, apparent build) plus their
+ * full profile and the look's styling data, and writes a tailored styling
+ * addendum for the image-edit prompt — detail that a static text template
+ * can't know without seeing the photo (e.g. "narrower shoulders, so keep
+ * the blazer's shoulder seam close rather than structured/padded", or
+ * "photo is a tight face crop, so the torso/build below the shoulders is
+ * not visible — infer proportions conservatively from the visible frame").
+ *
+ * Deliberately does NOT get to decide identity/pose/fit policy — this
+ * agent only ever contributes ADDITIONAL styling detail. The mandatory
+ * rules (keep the same face, re-pose to eye-level/confident, fit the
+ * outfit to the person's actual build) are always injected by
+ * buildLookEditPrompt() regardless of what this agent returns, so a
+ * malformed or oddly-worded agent response can only add nuance, never
+ * weaken or drop the non-negotiable constraints. If this call fails for
+ * any reason, the caller falls back to the static template alone — the
+ * mandatory rules still apply, just without the photo-specific detail.
+ */
+async function writeStylingAddendum(
+  openai: ReturnType<typeof getOpenAIClient>,
+  look: LookRecommendation,
+  profile: SkinTuneProfile,
+  context: OccasionContext,
+  photoUrl: string,
+): Promise<string | null> {
+  try {
+    const completion = await openai.chat.completions.create({
+      model: RECOMMENDATION_MODEL,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You help write image-editing instructions for a fashion styling app. You are shown a real person's photo and a complete-look recommendation for them. Write 2-4 short, concrete sentences of ADDITIONAL styling detail an image-editing AI should follow when re-dressing this exact person in the given look — things you can only know from actually looking at the photo (their apparent proportions, shoulder width, framing, visible build, hair length/texture, etc.) that would help the outfit, hairstyle, and overall styling look correctly fitted and natural on THIS specific person. Do not repeat generic instructions like 'keep the same face' or 'fit their build' — those are handled separately. Do not invent a different outfit, colour, or accessory than the one described — only add detail about HOW to render what's already specified so it suits this person. Never comment on attractiveness, body flaws, or anything that could read as a judgment — this is purely practical styling/rendering guidance. Output only the sentences, no preamble, no markdown.",
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Look to render on this person: outfit "${look.outfit}" (${look.outfitColor}), jewellery "${look.jewellery}", hairstyle "${look.hairstyle}", makeup "${look.makeup}", accessories "${look.accessories}". Occasion: ${context.occasion || "everyday"}. Person's stated build: ${profile.bodyBuild || "not specified"}, fit preference: ${profile.fit || "not specified"}. Write the styling addendum.`,
+            },
+            { type: "image_url", image_url: { url: photoUrl } },
+          ],
+        },
+      ],
+      temperature: 0.5,
+      max_tokens: 200,
+    });
+    const text = completion.choices[0]?.message?.content?.trim();
+    if (text) logger.debug({ lookId: look.id, stylingAddendum: text }, "Styling addendum generated");
+    return text || null;
+  } catch (err) {
+    logger.warn({ err, lookId: look.id }, "Styling addendum agent failed; continuing without it");
+    return null;
+  }
 }
 
 /**
@@ -190,7 +255,13 @@ router.post("/generate-image", async (req, res) => {
 
   try {
     const openai = getOpenAIClient();
-    const prompt = buildLookEditPrompt(look, profile, context);
+    // The addendum agent needs the actual photo to say anything useful, so
+    // it only runs when one was provided — see writeStylingAddendum()'s doc
+    // comment for what it does and doesn't control.
+    const stylingAddendum = photoUrl
+      ? await writeStylingAddendum(openai, look, profile, context, photoUrl)
+      : null;
+    const prompt = buildLookEditPrompt(look, profile, context, stylingAddendum);
 
     let imageUrl: string | undefined;
 

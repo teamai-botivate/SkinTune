@@ -204,6 +204,36 @@ always framed around genuine photographic quality (lighting, expression,
 grooming polish), never around "fixing" anything, per this product's
 language guidelines.
 
+**Outfit fit is called out explicitly too**, in `buildLookEditPrompt` —
+"preserve their build" alone only stops the model from altering body shape,
+it says nothing about whether the generated garments look tailored to that
+build (shoulder line, sleeve/hem length, fabric drape). A dedicated
+instruction requires the outfit to look correctly fitted to this specific
+person, never pasted-on or cut for a different body shape. Verified live
+against both a broad-build and a slim-build reference photo styled in
+fitted looks (a tailored blazer, a fitted wrap dress) — the shoulder seams,
+collar, and drape follow each person's actual proportions rather than a
+generic template.
+
+**Prompt-writing agent** (`writeStylingAddendum` in `generate-image.ts`) —
+before building the final edit prompt, a GPT-4o vision call looks at the
+user's actual uploaded photo plus their full profile and the look's
+styling data, and writes 2-4 sentences of additional photo-specific
+styling detail (e.g. actual apparent shoulder width, framing, build) that
+a static text template can't know without seeing the photo. This is
+strictly additive: the mandatory rules (identity preservation, pose
+recomposition, fit-to-build) are always injected by `buildLookEditPrompt`
+regardless of what this agent returns, so it can only add nuance, never
+weaken or drop a non-negotiable constraint. If the call fails for any
+reason, the route logs a warning and continues with the static template
+alone — the mandatory rules still apply. Only runs when a photo was
+provided (there's nothing for it to look at otherwise). Its output is
+logged at `debug` level (`stylingAddendum`) if you need to inspect what it
+wrote for a given request. Verified live: with a slim-build reference photo
+styled in a fitted evening dress, the addendum-assisted result correctly
+fit the actual narrow shoulder line and body proportions, not a generic
+template.
+
 **Do not re-batch this into a single multi-look request.** A single
 generated image (even JPEG-compressed) can run a few hundred KB to low
 single-digit MB; 5 of them in one JSON response is exactly what caused a
