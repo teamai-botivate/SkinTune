@@ -1,4 +1,14 @@
-export type PhotoStatus = 'good' | 'low-light' | 'too-far' | 'covered' | 'filter' | 'blurry' | 'angle' | 'low-confidence';
+// Photo-quality diagnostic states. `good` means the photo is usable; every other
+// value maps to a specific, explainable problem (see data/photo-diagnostics.ts).
+export type PhotoStatus =
+  | 'good'
+  | 'low-light'
+  | 'warm-light'
+  | 'blurry'
+  | 'angle'
+  | 'filter'
+  | 'occluded'
+  | 'low-confidence';
 
 export type AppearanceProfile = {
   skinTone: string;
@@ -6,33 +16,6 @@ export type AppearanceProfile = {
   confidence: number;
   contrast: string;
 };
-
-export type BodyProfile = {
-  build: string;
-  fit: string[];
-  priorities: string[];
-};
-
-export type StylePreferences = {
-  styles: string[];
-  impression: string[];
-};
-
-export type ColourPreferences = {
-  love: string[];
-  avoid: string[];
-};
-
-export type Restrictions = string[];
-
-export type OccasionContext = {
-  occasion: string;
-  details: string;
-};
-
-export type ImpressionPreference = string[];
-
-export type BudgetPreference = string;
 
 export type SkinTuneProfile = {
   name: string;
@@ -54,20 +37,35 @@ export type SkinTuneProfile = {
   budget: string;
 };
 
+/** Alias kept for continuity with a future backend contract. */
 export type UserProfile = SkinTuneProfile;
 
+export type LookPiece = {
+  category: string;
+  name: string;
+  detail: string;
+};
+
+// A complete-look recommendation. This is the contract between the
+// recommendation engine and the image-generation service (see
+// services/recommendation-engine.ts and services/image-generation.ts) — it
+// carries enough structured styling data for an image provider to visualize
+// the look without inventing its own styling strategy.
 export type LookRecommendation = {
   id: string;
   title: string;
   note: string;
+  category?: string;
   palette: string[];
-  pieces: { category: string; name: string; detail: string }[];
+  pieces: LookPiece[];
   outfit: string;
+  outfitColor: string;
   jewellery: string;
   hairstyle: string;
   makeup: string;
   accessories: string;
   footwear: string;
+  reasoning: string[];
   confidence: number;
   imageUrl: string;
 };
@@ -75,6 +73,7 @@ export type LookRecommendation = {
 export type LookFeedback = {
   feeling: string;
   changeRequest: string;
+  changeAreas: string[];
   lookId?: string;
 };
 

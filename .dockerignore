@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/.tsbuildinfo
+**/tsconfig.tsbuildinfo
+.git
+.gitignore
+.replit
+.replitignore
+.conversation
+*.log
+**/.replit-artifact

@@ -25,9 +25,13 @@ SkinTune helps people turn their appearance profile and personal preferences int
 
 - `artifacts/skintune/src/App.tsx` — frontend flow and screen state
 - `artifacts/skintune/src/types.ts` — SkinTune data contracts
-- `artifacts/skintune/src/services/mock-ai.ts` — replaceable image-generation boundary
+- `artifacts/skintune/src/data/options.ts` — centralized wizard option lists
+- `artifacts/skintune/src/services/recommendation-engine.ts` — the styling-decision boundary
+- `artifacts/skintune/src/services/image-generation.ts` — replaceable image-generation boundary
 - `artifacts/skintune/src/index.css` — app theme and responsive styles
 - `artifacts/skintune/README.md` — frontend setup and continuation notes
+- `Dockerfile` (repo root) — single-service Render deployment image
+- `CLAUDE.md` (repo root) — architecture and deployment guide for agents
 
 ## Architecture decisions
 
@@ -47,7 +51,11 @@ The requested experience is mobile-first, tap/select/continue-oriented, supporti
 ## Gotchas
 
 - The frontend workflow provides `PORT` and `BASE_PATH`; use the managed workflow rather than starting Vite without them.
-- The photo preview uses a browser object URL for this prototype and is not uploaded to a server.
+- The photo preview is read via `FileReader` as a base64 data URL for this prototype and is not uploaded to a server.
+
+## Deployment
+
+Deployed as a single Render Docker web service (see repo-root `Dockerfile` and `CLAUDE.md`): one container builds and runs both the frontend and `artifacts/api-server`, with Express serving the frontend's production build as static files alongside its `/api/*` routes. No `render.yaml` — the service is configured directly in the Render dashboard against the root `Dockerfile`.
 
 ## Pointers
 
