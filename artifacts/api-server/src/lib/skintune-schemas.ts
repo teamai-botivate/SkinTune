@@ -78,14 +78,52 @@ export const RecommendationsResponseSchema = z.object({
   recommendations: z.array(LookRecommendationSchema).length(5),
 });
 
-// ---- /api/generate-images ----
+// ---- /api/generate-image (one look per call) ----
+//
+// Deliberately singular/per-look rather than batching all 5 looks into one
+// request/response: a single generated image (base64, even compressed) can
+// run into the low single-digit MB, so 5 of them in one JSON payload risks
+// tripping body-size limits anywhere in the chain (this server, a hosting
+// platform's reverse proxy, etc.) in a way that's hard to predict or fully
+// control. One-look-per-call keeps every request and response small and
+// bounded regardless of image size, and lets the frontend show each look's
+// image as soon as it's ready instead of waiting on the slowest of five.
 
-export const GenerateImagesRequestSchema = z.object({
-  recommendations: z.array(LookRecommendationSchema),
+export const GenerateImageRequestSchema = z.object({
+  look: LookRecommendationSchema,
   profile: SkinTuneProfileSchema,
   context: OccasionContextSchema,
 });
 
-export const GenerateImagesResponseSchema = z.object({
-  recommendations: z.array(LookRecommendationSchema),
+export const GenerateImageResponseSchema = z.object({
+  look: LookRecommendationSchema,
 });
+
+// ---- /api/analyze-photo ----
+
+export const AnalyzePhotoRequestSchema = z.object({
+  // Base64 data URL of the uploaded photo. This route is the one place
+  // that legitimately needs it — everywhere else it's stripped from
+  // requests (see recommendation-engine.ts / image-generation.ts).
+  photoUrl: z.string().min(1),
+});
+
+export const PhotoAnalysisStatusSchema = z.enum([
+  "good",
+  "low-light",
+  "warm-light",
+  "blurry",
+  "angle",
+  "filter",
+  "occluded",
+  "low-confidence",
+]);
+
+export const AnalyzePhotoResponseSchema = z.object({
+  status: PhotoAnalysisStatusSchema,
+  skinTone: z.string(),
+  undertone: z.string(),
+  confidence: z.number().min(0).max(100),
+  contrast: z.string(),
+});
+export type AnalyzePhotoResponse = z.infer<typeof AnalyzePhotoResponseSchema>;

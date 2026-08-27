@@ -74,20 +74,45 @@ a curated static mock set so the UI never dead-ends.
 ### `src/services/image-generation.ts`
 
 Owns *visualising* those decisions. `generateLookImages(recommendations,
-profile, context)` calls the backend's `POST /api/generate-images` (OpenAI
-`gpt-image-2` — see `artifacts/api-server/src/routes/generate-images.ts`),
-which converts each look's structured data into a prompt and returns a real
-image (base64 data URL) per look. On failure for an individual look, that
-look keeps its existing placeholder `imageUrl` rather than failing the whole
-batch; on a full request failure, all recommendations are returned unchanged
-so the results screen still renders.
+profile, context)` calls the backend's `POST /api/generate-image` **once per
+look** (OpenAI `gpt-image-2` — see
+`artifacts/api-server/src/routes/generate-image.ts`), in parallel, not one
+batched request for all 5. Each look falls back independently to its
+existing placeholder `imageUrl` if its own request fails, so one failure
+never blocks the other four.
+
+**Do not re-batch this into a single multi-look request.** A single
+generated image (even JPEG-compressed) can run a few hundred KB to low
+single-digit MB; 5 of them in one JSON response is exactly what caused a
+real production `413 Payload Too Large` (intermittently, depending on
+image size that round) — not from the request body (already small), but
+because bundling 5 large images into one response risks tripping a
+body-size limit somewhere in the deployment chain that isn't fully under
+this app's control (a hosting platform's reverse proxy, for example). One
+request per look keeps every request/response small and bounded regardless
+of how many looks there are or how large any single image comes out.
 
 **The OpenAI API key lives only in `artifacts/api-server`**, read from
 `OPENAI_API_KEY` (see `src/lib/openai-client.ts`). It is never sent to or
 readable from the browser — the frontend only ever calls same-origin
-`/api/recommendations` and `/api/generate-images`. Model names are
-overridable via `OPENAI_TEXT_MODEL` (default `gpt-4o`) and
+`/api/recommendations`, `/api/generate-image`, and `/api/analyze-photo`.
+Model names are overridable via `OPENAI_TEXT_MODEL` (default `gpt-4o`) and
 `OPENAI_IMAGE_MODEL` (default `gpt-image-2`).
+
+### `src/services/photo-analysis.ts`
+
+Calls the backend's `POST /api/analyze-photo` (GPT-4o **vision** — see
+`artifacts/api-server/src/routes/analyze-photo.ts`) to actually look at the
+uploaded photo and judge whether it's usable, and if so, estimate skin
+tone/undertone/contrast/confidence. This is the ONE place the raw photo
+legitimately needs to leave the browser — `recommendations` and
+`generate-image` deliberately never receive it (see the profile
+strip-before-send note below). Falls back to a mock "good" result if the
+call fails, same pattern as the other two services.
+
+`PhotoPanel` in `App.tsx` calls this from `runAnalysis()`, which also keeps
+the staged "Analyzing…" UI on screen for its full minimum duration even if
+the real analysis returns faster, so the experience doesn't flash past.
 
 Local dev: copy `artifacts/api-server/.env.example` to `.env` (gitignored)
 and fill in `OPENAI_API_KEY`, or set it directly in your shell. The frontend
@@ -159,21 +184,28 @@ Render sets `$PORT` itself; `artifacts/api-server/src/index.ts` already reads
 **Request body size:** `SkinTuneProfile.photoUrl` is a base64 data URL of
 the user's photo and can be several hundred KB to a few MB. The frontend's
 `recommendation-engine.ts`/`image-generation.ts` deliberately strip
-`photoUrl` before POSTing to `/api/recommendations`/`/api/generate-images`
+`photoUrl` before POSTing to `/api/recommendations`/`/api/generate-image`
 (neither route uses the raw photo — only the already-derived
 `appearance.skinTone`/`undertone`), and `photoUrl` is `.optional()` in
 `skintune-schemas.ts` to match. `app.ts` also raises Express's default
-100kb JSON body limit to 15mb as defense in depth. If a future route
-genuinely needs to receive the photo, keep both fixes in mind — a request
-that "should" be small can silently balloon if photoUrl sneaks back in, and
-the previous 100kb default failed as an opaque 413 with no obvious frontend
-error until the network tab was checked.
+100kb JSON body limit to 15mb as defense in depth. `photo-analysis.ts` is
+the one exception — it legitimately sends the full photo to
+`/api/analyze-photo`, which is exactly why that route (not the other two)
+is the one place `photoUrl` is required, not optional, in
+`skintune-schemas.ts`.
+
+**Response body size:** see the "Do not re-batch" note under
+`image-generation.ts` above — `/api/generate-image` is deliberately
+one-look-per-call so no single response ever bundles multiple large
+base64 images. This was a real production bug (intermittent 413s once real
+images started coming back) and the fix was architectural (stop batching),
+not just raising a limit further.
 
 **Set `OPENAI_API_KEY` as a Render environment variable** on the service
-(Render dashboard → service → Environment) for real AI recommendations and
-images to work in production. Without it, both `/api/recommendations` and
-`/api/generate-images` return a 502 and the frontend transparently falls
-back to mock data — the app still runs, just without real AI output.
+(Render dashboard → service → Environment) for real AI recommendations,
+images, and photo analysis to work in production. Without it, all three
+routes return a 502 and the frontend transparently falls back to mock
+data — the app still runs, just without real AI output.
 
 **Do not add a `render.yaml`** unless the user asks for one — the dashboard
 Docker service + this Dockerfile is the whole deployment story.

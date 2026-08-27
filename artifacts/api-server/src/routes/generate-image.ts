@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import {
-  GenerateImagesRequestSchema,
-  GenerateImagesResponseSchema,
+  GenerateImageRequestSchema,
+  GenerateImageResponseSchema,
   type LookRecommendation,
   type SkinTuneProfile,
 } from "../lib/skintune-schemas";
@@ -42,49 +42,45 @@ function buildLookImagePrompt(
   return parts.filter(Boolean).join(" ");
 }
 
-router.post("/generate-images", async (req, res) => {
-  const parsed = GenerateImagesRequestSchema.safeParse(req.body);
+// One look per call — see the schema file's comment on GenerateImageRequestSchema
+// for why this is deliberately not batched across all 5 looks.
+router.post("/generate-image", async (req, res) => {
+  const parsed = GenerateImageRequestSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid request body", details: parsed.error.flatten() });
     return;
   }
 
-  const { recommendations, profile, context } = parsed.data;
+  const { look, profile, context } = parsed.data;
 
   try {
     const openai = getOpenAIClient();
+    const prompt = buildLookImagePrompt(look, profile, context);
+    const result = await openai.images.generate({
+      model: IMAGE_MODEL,
+      prompt,
+      size: "1024x1536",
+      // jpeg compresses far better than the png default for a photographic
+      // subject — meaningfully smaller response body for the same visual
+      // quality, which matters even per-image now that this is the only
+      // image in the response.
+      output_format: "jpeg",
+      output_compression: 80,
+      n: 1,
+    });
 
-    const withImages: LookRecommendation[] = await Promise.all(
-      recommendations.map(async (look) => {
-        try {
-          const prompt = buildLookImagePrompt(look, profile, context);
-          const result = await openai.images.generate({
-            model: IMAGE_MODEL,
-            prompt,
-            size: "1024x1536",
-            n: 1,
-          });
-          const image = result.data?.[0];
-          const imageUrl =
-            image?.url ??
-            (image?.b64_json ? `data:image/png;base64,${image.b64_json}` : undefined);
-          if (!imageUrl) throw new Error("Image provider returned no image");
-          return { ...look, imageUrl };
-        } catch (err) {
-          // One look's image failing shouldn't fail the whole batch — fall
-          // back to its existing placeholder and log the reason.
-          logger.error({ err, lookId: look.id }, "Failed to generate image for look");
-          return look;
-        }
-      }),
-    );
+    const image = result.data?.[0];
+    const imageUrl =
+      image?.url ??
+      (image?.b64_json ? `data:image/jpeg;base64,${image.b64_json}` : undefined);
+    if (!imageUrl) throw new Error("Image provider returned no image");
 
-    const data = GenerateImagesResponseSchema.parse({ recommendations: withImages });
+    const data = GenerateImageResponseSchema.parse({ look: { ...look, imageUrl } });
     res.json(data);
   } catch (err) {
-    logger.error({ err }, "Failed to generate look images");
+    logger.error({ err, lookId: look.id }, "Failed to generate image for look");
     res.status(502).json({
-      error: "Failed to generate look images",
+      error: "Failed to generate look image",
       message: err instanceof Error ? err.message : String(err),
     });
   }

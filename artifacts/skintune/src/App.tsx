@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { getLookRecommendations } from './services/recommendation-engine';
 import { generateLookImages } from './services/image-generation';
+import { analyzePhoto } from './services/photo-analysis';
 import { photoAnalysisStages, photoDiagnostics } from './data/photo-diagnostics';
 import {
   ageGroupOptions, bodyBuildOptions, budgetOptions, colorAvoidOptions, colorLoveOptions,
@@ -266,20 +267,27 @@ function PhotoPanel({ profile, update, onContinue, onBack }: { profile: SkinTune
   const [showCamera, setShowCamera] = useState(false);
   const diagnostic = photoDiagnostics[status];
 
-  const runAnalysis = (nextStatus: PhotoStatus = 'good') => {
+  const runAnalysis = (photoUrl: string) => {
     setAnalyzing(true);
     setStageIndex(0);
     const stepMs = 550;
-    photoAnalysisStages.forEach((_, i) => {
-      window.setTimeout(() => setStageIndex(i), stepMs * i);
+    const stageTimers = photoAnalysisStages.map((_, i) => window.setTimeout(() => setStageIndex(i), stepMs * i));
+    const minDisplayMs = stepMs * photoAnalysisStages.length;
+    const startedAt = Date.now();
+
+    analyzePhoto(photoUrl).then((result) => {
+      // Keep the staged progress on screen for at least its full run, even
+      // if the real analysis returns faster, so it doesn't flash past.
+      const elapsed = Date.now() - startedAt;
+      const settle = () => {
+        stageTimers.forEach((timer) => window.clearTimeout(timer));
+        setAnalyzing(false);
+        setStatus(result.status);
+        update({ appearance: { skinTone: result.skinTone, undertone: result.undertone, confidence: result.confidence, contrast: result.contrast } });
+      };
+      if (elapsed >= minDisplayMs) settle();
+      else window.setTimeout(settle, minDisplayMs - elapsed);
     });
-    window.setTimeout(() => {
-      setAnalyzing(false);
-      setStatus(nextStatus);
-      if (nextStatus === 'good') {
-        update({ appearance: { skinTone: 'Medium', undertone: 'Warm', confidence: 94, contrast: 'Medium' } });
-      }
-    }, stepMs * photoAnalysisStages.length + 300);
   };
 
   const pickFile = (event: ChangeEvent<HTMLInputElement>) => {
@@ -287,8 +295,9 @@ function PhotoPanel({ profile, update, onContinue, onBack }: { profile: SkinTune
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      update({ photoUrl: String(reader.result) });
-      runAnalysis('good');
+      const dataUrl = String(reader.result);
+      update({ photoUrl: dataUrl });
+      runAnalysis(dataUrl);
     };
     reader.readAsDataURL(file);
   };
@@ -301,7 +310,7 @@ function PhotoPanel({ profile, update, onContinue, onBack }: { profile: SkinTune
   const handleCapture = (dataUrl: string) => {
     setShowCamera(false);
     update({ photoUrl: dataUrl });
-    runAnalysis('good');
+    runAnalysis(dataUrl);
   };
 
   return <Shell profile={profile} onBack={onBack} onSettings={onBack} step={6} total={WIZARD_TOTAL}><div className="mx-auto max-w-3xl"><Intro eyebrow="06 / a gentle check" title="A photo helps us notice the details." body="This is only used to tune color and proportion suggestions. It is not a beauty score, identity check, or medical assessment.">
@@ -372,7 +381,19 @@ function Welcome({ onStart, onPrivacy }: { onStart: () => void; onPrivacy: () =>
   </div></div>;
 }
 
+// A real generated image is a data: URL (base64, from the mock/AI image
+// service) or an http(s) URL from a provider. The mock/placeholder state
+// uses a "/replace-with-generated/..." local path that was never meant to
+// resolve to a real file — treat that (or emptiness) as "no image yet".
+const hasRealImage = (url: string) => Boolean(url) && !url.startsWith('/replace-with-generated/');
+
 function LookVisual({ look, large = false }: { look: LookRecommendation; large?: boolean }) {
+  if (hasRealImage(look.imageUrl)) {
+    return <div className={`relative overflow-hidden rounded-[1.4rem] bg-[#e4d6c4] ${large ? 'min-h-[390px]' : 'h-56'}`}>
+      <img src={look.imageUrl} alt={`${look.title} — style visualisation`} className="size-full object-cover" loading="lazy" />
+      <span className="absolute bottom-3 left-3 rounded-full bg-card/80 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.14em] text-foreground backdrop-blur">Style visualisation</span>
+    </div>;
+  }
   return <div className={`relative overflow-hidden rounded-[1.4rem] bg-[#e4d6c4] ${large ? 'min-h-[390px]' : 'h-56'}`} data-image-url={look.imageUrl} aria-label={`${look.title} visual placeholder`}>
     <div className="absolute inset-0 opacity-75" style={{ background: `radial-gradient(circle at 68% 21%, ${look.palette[1]} 0 8%, transparent 8.5%), linear-gradient(145deg, ${look.palette[2]} 0 38%, ${look.palette[0]} 38% 70%, #b78668 70%)` }} />
     <div className="absolute bottom-[-8%] left-[23%] h-[82%] w-[55%] rounded-t-[48%] bg-card/70 mix-blend-screen" />

@@ -53,13 +53,15 @@ Recommendation Engine  →  5 LookRecommendation objects  →  Image Generation 
 
 `src/services/recommendation-engine.ts` exposes `getLookRecommendations(profile)`. It calls the backend's `POST /api/recommendations` (GPT-4o with strict JSON-schema structured output) to produce the *styling decision* — outfit, colour, jewellery, hairstyle, makeup, accessories, and the reasoning behind each of the 5 looks. If that call fails (no key configured, network issue, etc.) it falls back to a curated static mock set.
 
-`src/services/image-generation.ts` exposes `generateLookImages(recommendations, profile, context)`. It calls the backend's `POST /api/generate-images` (OpenAI `gpt-image-2`) to *visualise* those decisions — nothing more. On failure it returns the recommendations with their placeholder `imageUrl`s unchanged rather than blocking the results screen.
+`src/services/image-generation.ts` exposes `generateLookImages(recommendations, profile, context)`. It calls the backend's `POST /api/generate-image` **once per look, in parallel** (OpenAI `gpt-image-2`) to *visualise* those decisions — nothing more. This is deliberately one request per look rather than one batched request for all 5: bundling 5 large base64 images into a single response risked tripping body-size limits in the deployment chain (a real production bug, fixed by not batching rather than by raising limits further). Each look falls back independently to its placeholder `imageUrl` if its own request fails.
 
-**This separation is intentional and should be preserved:** an image model should visualize a styling decision, never invent its own. UI components import only these two functions — never a provider SDK directly, and never an API key (the key lives only in `artifacts/api-server`).
+`src/services/photo-analysis.ts` exposes `analyzePhoto(photoUrl)`. It calls the backend's `POST /api/analyze-photo` (GPT-4o vision) to judge photo quality and estimate skin tone/undertone/contrast/confidence from the actual uploaded photo. This is the one place the raw photo legitimately leaves the browser.
+
+**This separation is intentional and should be preserved:** an image model should visualize a styling decision, never invent its own. UI components import only these service functions — never a provider SDK directly, and never an API key (the key lives only in `artifacts/api-server`).
 
 ### The AI is already connected
 
-`artifacts/api-server/src/routes/recommendations.ts` and `.../generate-images.ts` hold the actual OpenAI calls. Set `OPENAI_API_KEY` (see `artifacts/api-server/.env.example`) to enable them — locally, or as a Render environment variable in production. `OPENAI_TEXT_MODEL` (default `gpt-4o`) and `OPENAI_IMAGE_MODEL` (default `gpt-image-2`) are overridable if you want to point at different models later.
+`artifacts/api-server/src/routes/recommendations.ts`, `.../generate-image.ts`, and `.../analyze-photo.ts` hold the actual OpenAI calls. Set `OPENAI_API_KEY` (see `artifacts/api-server/.env.example`) to enable them — locally, or as a Render environment variable in production. `OPENAI_TEXT_MODEL` (default `gpt-4o`) and `OPENAI_IMAGE_MODEL` (default `gpt-image-2`) are overridable if you want to point at different models later.
 
 ## Continuing the project
 
