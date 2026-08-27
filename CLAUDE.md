@@ -81,6 +81,22 @@ batched request for all 5. Each look falls back independently to its
 existing placeholder `imageUrl` if its own request fails, so one failure
 never blocks the other four.
 
+**Sends `profile.photoUrl` (unlike `recommendation-engine.ts`, which strips
+it)** — the backend calls OpenAI's `images.edit` on that photo, so the
+generated look shows THE SAME PERSON re-dressed, not a stranger from a text
+prompt. This is deliberate and required for the product's core promise; if
+the user skipped the photo step, the backend falls back to text-to-image
+generation via `images.generate` (still usable as a style visualisation,
+just won't resemble the user). Verified live: an edit call against a real
+reference photo returned an image with the same face/hair/build, correctly
+re-dressed per the look's outfit — see git history around this change.
+
+`gpt-image-2`'s `images.edit` does **not** support the `input_fidelity`
+parameter (confirmed against the live API with a 400, despite some docs
+describing it for the gpt-image family generally — it's `gpt-image-1`/
+`1.5`-only) — don't add it back without re-verifying against whatever model
+is current at the time.
+
 **Do not re-batch this into a single multi-look request.** A single
 generated image (even JPEG-compressed) can run a few hundred KB to low
 single-digit MB; 5 of them in one JSON response is exactly what caused a
@@ -104,11 +120,16 @@ Model names are overridable via `OPENAI_TEXT_MODEL` (default `gpt-4o`) and
 Calls the backend's `POST /api/analyze-photo` (GPT-4o **vision** — see
 `artifacts/api-server/src/routes/analyze-photo.ts`) to actually look at the
 uploaded photo and judge whether it's usable, and if so, estimate skin
-tone/undertone/contrast/confidence. This is the ONE place the raw photo
-legitimately needs to leave the browser — `recommendations` and
-`generate-image` deliberately never receive it (see the profile
-strip-before-send note below). Falls back to a mock "good" result if the
-call fails, same pattern as the other two services.
+tone/undertone/contrast/confidence. Falls back to a mock "good" result if
+the call fails, same pattern as the other services.
+
+**Two of the three AI routes now legitimately receive the raw photo:**
+`/api/analyze-photo` (to read it) and `/api/generate-image` (to edit it —
+see `image-generation.ts` above). Only `/api/recommendations` still strips
+it (it only ever needs `appearance.skinTone`/`undertone`, already derived
+by the analysis step). Don't assume "the photo never leaves the browser" as
+a blanket rule when touching these routes — check which one you're actually
+changing.
 
 `PhotoPanel` in `App.tsx` calls this from `runAnalysis()`, which also keeps
 the staged "Analyzing…" UI on screen for its full minimum duration even if
@@ -182,17 +203,16 @@ Render sets `$PORT` itself; `artifacts/api-server/src/index.ts` already reads
 `STATIC_DIR` is baked into the image as `/app/public` by the Dockerfile.
 
 **Request body size:** `SkinTuneProfile.photoUrl` is a base64 data URL of
-the user's photo and can be several hundred KB to a few MB. The frontend's
-`recommendation-engine.ts`/`image-generation.ts` deliberately strip
-`photoUrl` before POSTing to `/api/recommendations`/`/api/generate-image`
-(neither route uses the raw photo — only the already-derived
-`appearance.skinTone`/`undertone`), and `photoUrl` is `.optional()` in
-`skintune-schemas.ts` to match. `app.ts` also raises Express's default
-100kb JSON body limit to 15mb as defense in depth. `photo-analysis.ts` is
-the one exception — it legitimately sends the full photo to
-`/api/analyze-photo`, which is exactly why that route (not the other two)
-is the one place `photoUrl` is required, not optional, in
-`skintune-schemas.ts`.
+the user's photo and can be several hundred KB to a few MB. Only
+`recommendation-engine.ts` strips it before POSTing (`/api/recommendations`
+never uses the raw photo — only the already-derived
+`appearance.skinTone`/`undertone`), so `photoUrl` is `.optional()` on
+`SkinTuneProfileSchema`. `photo-analysis.ts` and `image-generation.ts` both
+legitimately send it — the former to read it, the latter as a separate
+top-level `photoUrl` field on `GenerateImageRequestSchema` (edited via
+`images.edit`, not embedded in `profile`). `app.ts` raises Express's
+default 100kb JSON body limit to 15mb, which comfortably covers a single
+photo on any of these routes.
 
 **Response body size:** see the "Do not re-batch" note under
 `image-generation.ts` above — `/api/generate-image` is deliberately

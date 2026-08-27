@@ -10,9 +10,11 @@ export const SkinTuneProfileSchema = z.object({
   pronouns: z.string(),
   ageGroup: z.string(),
   height: z.string(),
-  // Optional here: the frontend deliberately omits the raw photo (a
-  // multi-megabyte base64 data URL) from AI request bodies — neither route
-  // uses it, only the already-derived appearance.skinTone/undertone below.
+  // Optional here: /api/recommendations never needs the raw photo (only
+  // the already-derived appearance.skinTone/undertone below), so the
+  // frontend omits it from that call. /api/generate-image DOES need it —
+  // see GenerateImageRequestSchema.photoUrl below, sent as a separate
+  // top-level field on that request rather than nested in profile.
   photoUrl: z.string().optional(),
   appearance: z.object({
     skinTone: z.string(),
@@ -93,6 +95,13 @@ export const GenerateImageRequestSchema = z.object({
   look: LookRecommendationSchema,
   profile: SkinTuneProfileSchema,
   context: OccasionContextSchema,
+  // The user's own uploaded photo, sent so the generated look edits their
+  // actual photo (images.edit) rather than generating a stranger from a
+  // text prompt. This is the one AI request that legitimately needs it —
+  // see the note on SkinTuneProfileSchema.photoUrl. Optional: if the user
+  // skipped the photo step, the route falls back to text-to-image
+  // generation instead of an edit.
+  photoUrl: z.string().optional(),
 });
 
 export const GenerateImageResponseSchema = z.object({

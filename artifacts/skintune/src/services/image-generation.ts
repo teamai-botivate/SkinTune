@@ -5,10 +5,12 @@
 //   Recommendation Engine  →  5 LookRecommendation objects  →  Image Generation Service  →  5 images
 //
 // This module is the ONLY place in the frontend that talks about images. It
-// sends each LookRecommendation's structured styling data to the backend
-// (/api/generate-image, which calls OpenAI's gpt-image-2), and returns each
-// look with a real imageUrl. It never decides the styling strategy itself —
-// that's the recommendation engine's job (see services/recommendation-engine.ts).
+// sends each LookRecommendation's structured styling data — plus the user's
+// own uploaded photo — to the backend (/api/generate-image, which calls
+// OpenAI's gpt-image-2 images.edit endpoint), and returns each look with a
+// real imageUrl showing THE SAME PERSON re-dressed in that look, not a
+// generated stranger. It never decides the styling strategy itself — that's
+// the recommendation engine's job (see services/recommendation-engine.ts).
 // UI components must not import a provider SDK directly; they call
 // generateLookImages() and stay unaware of how images are produced.
 //
@@ -34,12 +36,13 @@ const generateOneLookImage = async (
   look: LookRecommendation,
   profileForRequest: Omit<SkinTuneProfile, 'photoUrl'>,
   context: OccasionContext,
+  photoUrl: string,
 ): Promise<LookRecommendation> => {
   try {
     const res = await fetch('/api/generate-image', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ look, profile: profileForRequest, context }),
+      body: JSON.stringify({ look, profile: profileForRequest, context, photoUrl: photoUrl || undefined }),
     });
     if (!res.ok) throw new Error(`Image generation request failed: ${res.status}`);
     const data = (await res.json()) as { look: LookRecommendation };
@@ -56,16 +59,19 @@ const generateOneLookImage = async (
  * (in parallel) rather than a single batched request. Each look falls back
  * independently to its existing placeholder imageUrl if its own request
  * fails, so one failure never blocks the other four.
+ *
+ * profile.photoUrl IS sent here (unlike recommendation-engine.ts, which
+ * strips it) — the backend edits that photo so each look shows the same
+ * person, not a generated stranger. If the user skipped the photo step,
+ * the backend falls back to text-to-image generation.
  */
 export const generateLookImages = async (
   recommendations: LookRecommendation[],
   profile: SkinTuneProfile,
   context: OccasionContext,
 ): Promise<LookRecommendation[]> => {
-  // Same as recommendation-engine.ts: the image prompt only ever uses the
-  // already-derived appearance.skinTone/undertone, never the raw photo.
-  const { photoUrl: _photoUrl, ...profileForRequest } = profile;
+  const { photoUrl, ...profileForRequest } = profile;
   return Promise.all(
-    recommendations.map((look) => generateOneLookImage(look, profileForRequest, context)),
+    recommendations.map((look) => generateOneLookImage(look, profileForRequest, context, photoUrl)),
   );
 };
