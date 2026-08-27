@@ -6,7 +6,7 @@ import {
   type LookRecommendation,
   type SkinTuneProfile,
 } from "../lib/skintune-schemas";
-import { getOpenAIClient, IMAGE_MODEL } from "../lib/openai-client";
+import { getOpenAIClient, IMAGE_MODEL, RECOMMENDATION_MODEL } from "../lib/openai-client";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -17,20 +17,19 @@ type OccasionContext = { occasion: string; details: string };
  * Converts one recommendation's structured styling data into an edit
  * instruction. The image model only ever visualizes a styling decision made
  * by the recommendation engine (see routes/recommendations.ts) — it never
- * invents its own outfit, colour, or styling strategy. Framed as an edit
- * ("dress this same person in...") rather than a from-scratch generation
- * prompt, since the call itself is now images.edit against the user's own
- * uploaded photo — see the route handler below.
+ * invents its own outfit, colour, or styling strategy.
  *
- * Identity preservation is a real, documented weak point of images.edit:
+ * Identity preservation is a real, documented weak point of image editing:
  * the further the requested composition is from the input photo (e.g. a
  * tight face-crop selfie -> a full-length editorial shot), the more room
  * the model has to "reinterpret" the face rather than preserve it. Two
- * things mitigate this: (1) very explicit, repeated identity instructions
- * up front and again at the end (models weight both ends of a prompt more
- * heavily), and (2) requesting waist-up/portrait framing (see size/prompt
- * below) instead of full-length, which is a much smaller transformation
- * from a typical selfie and empirically preserves the face far better.
+ * prompt-level things mitigate this regardless of which API path is used
+ * (see the route handler below for the API-level mitigation):
+ * (1) very explicit, repeated identity instructions up front and again at
+ * the end (models weight both ends of a prompt more heavily), and
+ * (2) requesting waist-up/portrait framing instead of full-length, which is
+ * a much smaller transformation from a typical selfie and empirically
+ * preserves the face far better.
  */
 function buildLookEditPrompt(
   look: LookRecommendation,
@@ -62,6 +61,93 @@ function decodeDataUrl(dataUrl: string): { mime: string; buffer: Buffer } {
   return { mime, buffer: Buffer.from(base64, "base64") };
 }
 
+/**
+ * Primary path: edit the user's own uploaded photo via the Responses API's
+ * image_generation tool. Verified (against a real selfie) to preserve
+ * identity — face, hairline, facial hair pattern, even a facial mole — far
+ * better than the classic images.edit endpoint below. detail: 'original' on
+ * the input image skips any downscaling before the model sees the photo;
+ * quality: 'high' on the output tool improves fidelity further.
+ *
+ * Requires the OpenAI organization to be "Verified" (platform.openai.com ->
+ * Settings -> Organization) to call gpt-4o (or similar) via the Responses
+ * API with the image_generation tool — an unverified org gets a 403. If
+ * that happens (or any other failure), the caller falls back to
+ * editViaImagesEdit below rather than failing the whole request.
+ */
+async function editViaResponsesApi(
+  openai: ReturnType<typeof getOpenAIClient>,
+  prompt: string,
+  photoUrl: string,
+): Promise<string> {
+  const response = await openai.responses.create({
+    model: RECOMMENDATION_MODEL,
+    input: [
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: prompt },
+          { type: "input_image", image_url: photoUrl, detail: "original" },
+        ],
+      },
+    ],
+    tools: [
+      {
+        type: "image_generation",
+        model: IMAGE_MODEL,
+        quality: "high",
+        size: "1024x1536",
+        output_format: "jpeg",
+        output_compression: 85,
+      },
+    ],
+  });
+
+  const imageCall = response.output.find(
+    (item): item is Extract<typeof item, { type: "image_generation_call" }> =>
+      item.type === "image_generation_call",
+  );
+  if (!imageCall?.result) {
+    throw new Error(
+      `Responses API image generation returned no result (status: ${imageCall?.status ?? "no call found"})`,
+    );
+  }
+  return `data:image/jpeg;base64,${imageCall.result}`;
+}
+
+/**
+ * Fallback path: the classic images.edit endpoint. Weaker identity
+ * preservation than the Responses API path above (confirmed against a real
+ * selfie — this alone lost the user's face in production before the
+ * Responses API migration), but doesn't require org verification, so it
+ * keeps the feature working while that's pending. input_fidelity is
+ * intentionally NOT set here either: gpt-image-2 rejects it with a 400
+ * ("does not support the 'input_fidelity' parameter") on both this and the
+ * Responses API path — confirmed against the live API.
+ */
+async function editViaImagesEdit(
+  openai: ReturnType<typeof getOpenAIClient>,
+  prompt: string,
+  photoUrl: string,
+): Promise<string> {
+  const { mime, buffer } = decodeDataUrl(photoUrl);
+  const ext = mime.split("/")[1] ?? "jpg";
+  const file = await toFile(buffer, `photo.${ext}`, { type: mime });
+  const result = await openai.images.edit({
+    model: IMAGE_MODEL,
+    image: file,
+    prompt,
+    size: "1024x1536",
+    output_format: "jpeg",
+    output_compression: 80,
+    n: 1,
+  });
+  const image = result.data?.[0];
+  const imageUrl = image?.b64_json ? `data:image/jpeg;base64,${image.b64_json}` : image?.url;
+  if (!imageUrl) throw new Error("images.edit returned no image");
+  return imageUrl;
+}
+
 // One look per call — see the schema file's comment on GenerateImageRequestSchema
 // for why this is deliberately not batched across all 5 looks.
 router.post("/generate-image", async (req, res) => {
@@ -80,31 +166,20 @@ router.post("/generate-image", async (req, res) => {
     let imageUrl: string | undefined;
 
     if (photoUrl) {
-      // Edit the user's own uploaded photo so the generated look shows the
-      // same person, not a stranger — this is the whole point of the
-      // feature. Note: input_fidelity is documented for gpt-image-1/1.5 but
-      // gpt-image-2 rejects it with a 400 ("does not support the
-      // 'input_fidelity' parameter") — confirmed against the live API, not
-      // just docs, so deliberately omitted here. If a future model version
-      // adds support, this is the natural place to re-add it.
-      const { mime, buffer } = decodeDataUrl(photoUrl);
-      const ext = mime.split("/")[1] ?? "jpg";
-      const file = await toFile(buffer, `photo.${ext}`, { type: mime });
-      const result = await openai.images.edit({
-        model: IMAGE_MODEL,
-        image: file,
-        prompt,
-        size: "1024x1536",
-        output_format: "jpeg",
-        output_compression: 80,
-        n: 1,
-      });
-      const image = result.data?.[0];
-      imageUrl = image?.b64_json ? `data:image/jpeg;base64,${image.b64_json}` : image?.url;
+      try {
+        imageUrl = await editViaResponsesApi(openai, prompt, photoUrl);
+      } catch (responsesApiErr) {
+        logger.warn(
+          { err: responsesApiErr, lookId: look.id },
+          "Responses API image edit failed, falling back to images.edit",
+        );
+        imageUrl = await editViaImagesEdit(openai, prompt, photoUrl);
+      }
     } else {
       // No photo was provided (e.g. user skipped the photo step) — fall
-      // back to text-to-image generation. The result won't resemble the
-      // user, but it's still a usable style visualisation.
+      // back to plain text-to-image generation. The result won't resemble
+      // the user (there's nothing to preserve), but it's still a usable
+      // style visualisation.
       const result = await openai.images.generate({
         model: IMAGE_MODEL,
         prompt,

@@ -135,6 +135,35 @@ and budget time to re-solve it (e.g. multi-step composition, or accepting
 the tradeoff with a clear UI disclaimer) rather than assuming the current
 prompt generalizes to a bigger transformation.
 
+**Even with the waist-up prompt fix above, `images.edit` was still a
+noticeably weaker face match than it should be.** The real fix was the API
+path, not just the prompt: `generate-image.ts` now tries the **Responses
+API's `image_generation` tool first** (`editViaResponsesApi`), with
+`detail: 'original'` on the input image (skips any downscaling before the
+model sees the photo) and `quality: 'high'` on the tool. This is a
+genuinely different, better result — verified side-by-side against the
+same selfie-style test photo: the Responses API output preserved the
+hairline, eyebrow shape, mustache pattern, and even a facial mole; the
+`images.edit` output on the same input photo did not preserve those as
+well. Do not treat `images.edit` as "the fix" — it's the fallback now, kept
+only for when the Responses API path is unavailable (see below).
+
+**The Responses API's `image_generation` tool requires the OpenAI
+organization to be "Verified"** (platform.openai.com → Settings →
+Organization → Verify Organization) — an unverified org gets a 403
+("Your organization must be verified to use the model...") on every call.
+This is a real, confirmed constraint, not a hypothetical: it blocked this
+route in this exact deployment before verification. `generate-image.ts`
+therefore tries `editViaResponsesApi` first and, on ANY failure (403,
+network error, malformed response, etc.), logs a warning and falls back to
+`editViaImagesEdit` — so the feature keeps working (with weaker identity
+preservation) rather than failing the whole request while verification is
+pending or if it's ever revoked. Once the deploying org is verified, no
+code change is needed — the primary path just starts succeeding and the
+fallback stops being exercised. Verify this by checking Render logs for
+"Responses API image edit failed, falling back to images.edit" warnings —
+their absence after verification confirms the primary path is working.
+
 **Do not re-batch this into a single multi-look request.** A single
 generated image (even JPEG-compressed) can run a few hundred KB to low
 single-digit MB; 5 of them in one JSON response is exactly what caused a
