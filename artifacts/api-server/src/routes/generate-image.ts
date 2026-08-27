@@ -21,6 +21,16 @@ type OccasionContext = { occasion: string; details: string };
  * ("dress this same person in...") rather than a from-scratch generation
  * prompt, since the call itself is now images.edit against the user's own
  * uploaded photo — see the route handler below.
+ *
+ * Identity preservation is a real, documented weak point of images.edit:
+ * the further the requested composition is from the input photo (e.g. a
+ * tight face-crop selfie -> a full-length editorial shot), the more room
+ * the model has to "reinterpret" the face rather than preserve it. Two
+ * things mitigate this: (1) very explicit, repeated identity instructions
+ * up front and again at the end (models weight both ends of a prompt more
+ * heavily), and (2) requesting waist-up/portrait framing (see size/prompt
+ * below) instead of full-length, which is a much smaller transformation
+ * from a typical selfie and empirically preserves the face far better.
  */
 function buildLookEditPrompt(
   look: LookRecommendation,
@@ -28,17 +38,18 @@ function buildLookEditPrompt(
   context: OccasionContext,
 ): string {
   const parts = [
-    `Keep this exact same person — their face, identity, and expression must stay recognizably unchanged. Re-dress them for a ${context.occasion || "everyday"} setting, editorial style visualisation, full-length shot.`,
+    `This is a photo of a real specific person. Edit ONLY their clothing, hairstyle, makeup, and background — you must NOT change their face, facial structure, facial features, skin tone, or identity in any way. The exact same face from the input photo must appear in the output, just re-dressed.`,
+    `Re-dress this exact person for a ${context.occasion || "everyday"} setting: waist-up editorial portrait, camera at eye level, person looking toward camera, natural relaxed expression.`,
     `New outfit: ${look.outfit}`,
     `Colour direction: ${look.outfitColor}`,
     `Jewellery: ${look.jewellery}`,
     `Hairstyle: ${look.hairstyle}`,
     `Makeup: ${look.makeup}`,
-    `Footwear: ${look.footwear}`,
     `Accessories: ${look.accessories}`,
     profile.bodyBuild ? `Preserve their natural build (${profile.bodyBuild}) — do not alter body shape.` : "",
     context.details ? `Context: ${context.details}` : "",
-    "Natural lighting, tasteful and supportive, no beauty filter, no visible text or watermark. Do not change the person's face.",
+    "Natural lighting, tasteful and supportive, no beauty filter, no visible text or watermark.",
+    "Reminder: keep the same face and identity as the input photo — this is a clothing and styling edit, not a new person.",
   ];
   return parts.filter(Boolean).join(" ");
 }

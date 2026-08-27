@@ -97,6 +97,29 @@ describing it for the gpt-image family generally — it's `gpt-image-1`/
 `1.5`-only) — don't add it back without re-verifying against whatever model
 is current at the time.
 
+**Identity preservation is fragile and composition-dependent — this was a
+real production bug.** `images.edit` does not strongly guarantee the output
+face matches the input face; the model has more room to "reinterpret" the
+face the further the requested output composition is from the input photo.
+A close-up selfie edited into a full-length editorial shot lost the user's
+actual face entirely in production. The fix (see `buildLookEditPrompt` in
+`generate-image.ts`) was two things together, not prompting alone:
+1. Very explicit, repeated identity instructions — stated up front AND
+   restated at the end of the prompt (both ends of a prompt get weighted
+   more heavily than the middle).
+2. **Requesting waist-up/portrait framing instead of full-length.** This is
+   the bigger lever: a smaller transformation from a typical selfie's
+   framing empirically preserves the face far better than asking for a
+   full-length editorial shot. Verified by generating a synthetic
+   selfie-style reference photo (close-up, low angle, distinctive facial
+   hair, matching a real user's actual upload style) and confirming the
+   edited output kept the same face, hair, and build.
+
+If you ever need full-length shots again, expect identity drift to return
+and budget time to re-solve it (e.g. multi-step composition, or accepting
+the tradeoff with a clear UI disclaimer) rather than assuming the current
+prompt generalizes to a bigger transformation.
+
 **Do not re-batch this into a single multi-look request.** A single
 generated image (even JPEG-compressed) can run a few hundred KB to low
 single-digit MB; 5 of them in one JSON response is exactly what caused a
