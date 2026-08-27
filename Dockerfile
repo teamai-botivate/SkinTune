@@ -10,6 +10,12 @@
 
 FROM node:24-slim AS base
 WORKDIR /workspace
+# corepack resolves the pnpm version from package.json's "packageManager"
+# field. That field MUST stay pinned to the same pnpm version used to
+# generate pnpm-lock.yaml (currently 9.15.9) — an unpinned/mismatched pnpm
+# version can normalize the lockfile's "overrides" differently and fail
+# `pnpm install --frozen-lockfile` with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH
+# even though nothing about the dependencies actually changed.
 RUN corepack enable
 
 # ---- deps: install the full workspace once, cached by lockfile ----

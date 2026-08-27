@@ -156,6 +156,17 @@ Dockerfile `COPY`s exists, and that `pnpm --filter @workspace/skintune run
 build` and `pnpm --filter @workspace/api-server run build` both still
 succeed from repo root.
 
+**pnpm version must stay pinned.** Root `package.json` has
+`"packageManager": "pnpm@9.15.9"` — this MUST match the pnpm version that
+generated `pnpm-lock.yaml`. The Dockerfile's `corepack enable` reads this
+field to resolve which pnpm to install; without it (or if it drifts from the
+lockfile's version), a newer pnpm can normalize `pnpm-workspace.yaml`'s
+`overrides` block differently and `pnpm install --frozen-lockfile` fails
+with `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH` on Render even though nothing about
+the actual dependencies changed (this happened once — see git history around
+the fix). If you ever intentionally bump the local pnpm version, update this
+field to match in the same commit, and regenerate `pnpm-lock.yaml` if needed.
+
 ## Commands
 
 ```bash
