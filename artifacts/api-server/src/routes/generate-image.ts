@@ -30,7 +30,27 @@ type OccasionContext = { occasion: string; details: string };
  * (2) requesting waist-up/portrait framing instead of full-length, which is
  * a much smaller transformation from a typical selfie and empirically
  * preserves the face far better.
+ *
+ * Pose and head angle are re-composed regardless of the input photo's
+ * angle: many real uploads are casual low-angle selfies (phone held below
+ * eye level, chin tucked, eyes cast down/sideways), and preserving that
+ * literal head angle would carry the "bad selfie" framing into a supposedly
+ * polished result. The instructions below explicitly ask for eye-level
+ * camera and a confident straight-on gaze regardless of how the input
+ * photo was angled — only the FACE is preserved, not the camera angle or
+ * head tilt it happened to be photographed at.
  */
+function buildFlatteringInstruction(pronouns: string): string {
+  const normalized = pronouns.toLowerCase();
+  if (normalized.includes("women")) {
+    return "Present her looking genuinely beautiful and radiant: soft flattering light on the face, a confident and warm expression, polished hair and makeup exactly as specified, elegant relaxed posture, chin level and gently lifted.";
+  }
+  if (normalized.includes("men")) {
+    return "Present him looking genuinely handsome and sharp: strong flattering light, a confident and grounded expression, well-groomed styling exactly as specified, sharp posture and fit, chin level and shoulders squared.";
+  }
+  return "Present them looking genuinely confident and their best self: flattering light on the face, a warm self-assured expression, polished styling exactly as specified, relaxed strong posture, chin level and shoulders squared.";
+}
+
 function buildLookEditPrompt(
   look: LookRecommendation,
   profile: SkinTuneProfile,
@@ -38,7 +58,8 @@ function buildLookEditPrompt(
 ): string {
   const parts = [
     `This is a photo of a real specific person. Edit ONLY their clothing, hairstyle, makeup, and background — you must NOT change their face, facial structure, facial features, skin tone, or identity in any way. The exact same face from the input photo must appear in the output, just re-dressed.`,
-    `Re-dress this exact person for a ${context.occasion || "everyday"} setting: waist-up editorial portrait, camera at eye level, person looking toward camera, natural relaxed expression.`,
+    `Re-dress and re-pose this exact person for a ${context.occasion || "everyday"} setting: waist-up editorial portrait. Regardless of the angle or head position in the original photo, compose the new shot with the camera held at the subject's eye level, their head facing forward toward the camera, chin level (not tilted down or to the side), shoulders relaxed and squared, and a natural confident expression — this is a flattering studio-style repose, not a copy of the original snapshot's angle.`,
+    buildFlatteringInstruction(profile.pronouns),
     `New outfit: ${look.outfit}`,
     `Colour direction: ${look.outfitColor}`,
     `Jewellery: ${look.jewellery}`,
@@ -47,8 +68,8 @@ function buildLookEditPrompt(
     `Accessories: ${look.accessories}`,
     profile.bodyBuild ? `Preserve their natural build (${profile.bodyBuild}) — do not alter body shape.` : "",
     context.details ? `Context: ${context.details}` : "",
-    "Natural lighting, tasteful and supportive, no beauty filter, no visible text or watermark.",
-    "Reminder: keep the same face and identity as the input photo — this is a clothing and styling edit, not a new person.",
+    "Natural lighting, tasteful and supportive, no beauty filter, no visible text or watermark. Professional editorial photo quality, magazine-worthy composition, flattering pose and head angle — this should look like a genuinely great photo of this person.",
+    "Reminder: keep the same face and identity as the input photo, but with a confident eye-level pose and head angle — this is a clothing, pose, and styling edit, not a new person and not a literal copy of the original snapshot's camera angle.",
   ];
   return parts.filter(Boolean).join(" ");
 }

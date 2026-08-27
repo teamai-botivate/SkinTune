@@ -76,6 +76,28 @@ The **real product code** lives entirely in `artifacts/skintune/src/`. Read
   below. UI components only ever call these two functions; they never talk
   to a specific model/provider directly.
 
+### Theme (`src/index.css`)
+
+**Deep luxury palette** — near-black charcoal background, warm ivory text,
+gold/champagne primary/accent. This is the app's one and only palette;
+there is no light/dark toggle in the UI, so the `:root` custom properties
+in `index.css` ARE the theme (not an override of some other default). A
+previous prototype had an unused `.dark` class variant with different
+values and no toggle ever invoked it — that's been removed; if a
+light/dark toggle is ever added, add it back as a real `.light`/`.dark`
+pair driven by actual UI state, not dead CSS. Nearly all colour usage in
+`App.tsx` goes through the `bg-background`/`text-foreground`/`bg-primary`/
+etc. Tailwind utilities that resolve to these tokens — a few genuinely
+decorative spots (the `Welcome` screen's abstract skin-tone illustration,
+`LookVisual`'s CSS-gradient placeholder before a real image arrives) use
+literal hex values on purpose since they represent a person's colouring or
+a look's actual palette, not UI chrome, and shouldn't follow the site
+theme. When changing the theme again, grep `App.tsx` for `bg-\[#` to find
+any hardcoded hex that IS UI chrome (there have been stragglers before —
+e.g. the `Generating` screen used to hardcode its own dark colours instead
+of using tokens) and convert those, but leave the person/look-representing
+ones alone.
+
 ### `src/services/recommendation-engine.ts`
 
 Owns the *styling decision*: given a `SkinTuneProfile`, returns 5
@@ -164,6 +186,24 @@ fallback stops being exercised. Verify this by checking Render logs for
 "Responses API image edit failed, falling back to images.edit" warnings —
 their absence after verification confirms the primary path is working.
 
+**The edit prompt re-poses the person — it does not preserve the input
+photo's camera angle or head position.** Real uploads are often casual
+low-angle selfies (phone held low, chin tucked, eyes cast down/sideways).
+Preserving that literal angle would carry an unflattering "bad selfie"
+composition straight into the styled result. `buildLookEditPrompt` /
+`buildFlatteringInstruction` in `generate-image.ts` therefore explicitly
+instruct the model to keep the same FACE (identity) but re-compose the pose
+at eye-level camera height, chin level, shoulders squared, confident
+expression — verified against a deliberately bad-angle test selfie (phone
+held below chest, head tilted down and away): the output came back
+eye-level, confident, and correctly dressed, with the same face preserved.
+`buildFlatteringInstruction` also branches on `profile.pronouns` for
+gender-appropriate "at their best" language (beautiful/radiant for women's
+styling, handsome/sharp for men's, confident/best-self neutral otherwise) —
+always framed around genuine photographic quality (lighting, expression,
+grooming polish), never around "fixing" anything, per this product's
+language guidelines.
+
 **Do not re-batch this into a single multi-look request.** A single
 generated image (even JPEG-compressed) can run a few hundred KB to low
 single-digit MB; 5 of them in one JSON response is exactly what caused a
@@ -197,6 +237,22 @@ it (it only ever needs `appearance.skinTone`/`undertone`, already derived
 by the analysis step). Don't assume "the photo never leaves the browser" as
 a blanket rule when touching these routes — check which one you're actually
 changing.
+
+**Photo-quality gating is deliberately lenient.** The system prompt in
+`analyze-photo.ts` was originally too strict — it kept flagging ordinary
+phone selfies (low angle, indoor lighting, casual framing) as low-light/
+angle/blurry, forcing real users into repeated retries for photos that were
+genuinely fine. Fixed by rewriting the prompt to explicitly treat a normal
+imperfect phone selfie as "good" by default, and reserve each problem
+status for only the case that would genuinely prevent a colour read (too
+dark to see features at all, face not recognisable, mostly out of frame,
+etc.) — "when in doubt, choose good" is stated explicitly. Verified against
+a deliberately bad-angle/low-light test selfie: it now returns `status:
+"good"` with ~90% confidence instead of being rejected. If retries start
+feeling too easy to trigger again in the future, tighten this prompt
+carefully and re-verify against a realistic bad selfie before shipping —
+there's no numeric threshold in the frontend to tune instead; the model's
+own judgment via `status` is the only gate.
 
 `PhotoPanel` in `App.tsx` calls this from `runAnalysis()`, which also keeps
 the staged "Analyzing…" UI on screen for its full minimum duration even if
