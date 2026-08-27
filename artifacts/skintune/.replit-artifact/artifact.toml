@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "SkinTune"
+description = "A premium personal appearance intelligence app that learns your preferences and creates five complete, confidence-building looks for any occasion."
+version = "1.0.0"
+id = "artifacts/skintune"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19474
+
+[services.development]
+run = "pnpm --filter @workspace/skintune run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/skintune", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/skintune/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19474"
+BASE_PATH = "/"

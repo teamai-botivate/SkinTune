@@ -1,10 +1,11 @@
-# [Project name]
+# SkinTune
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+SkinTune helps people turn their appearance profile and personal preferences into five supportive, complete looks for the occasion ahead.
 
 ## Run & Operate
 
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm --filter @workspace/skintune run dev` — run the SkinTune frontend
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
@@ -22,23 +23,31 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/skintune/src/App.tsx` — frontend flow and screen state
+- `artifacts/skintune/src/types.ts` — SkinTune data contracts
+- `artifacts/skintune/src/services/mock-ai.ts` — replaceable image-generation boundary
+- `artifacts/skintune/src/index.css` — app theme and responsive styles
+- `artifacts/skintune/README.md` — frontend setup and continuation notes
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- This first version is intentionally frontend-only: localStorage makes the full journey testable without a backend.
+- Image generation is behind a service boundary so a real image provider can replace the mock without rewriting UI.
+- Recommendations are complete-look strategies first; images visualize those strategies rather than inventing them.
+- Appearance guidance is framed as supportive styling context, never a medical assessment or beauty score.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+SkinTune supports profile onboarding, photo consent and confidence diagnostics, body and fit preferences, personal style and color preferences, restrictions, occasion context, desired impression, budget, editable review, five generated looks, detailed look views, saved looks, feedback, returning-user continuity, and local data deletion.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+The requested experience is mobile-first, tap/select/continue-oriented, supportive, fashion-tech, feminine-neutral, and free of wardrobe digitization or try-on.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- The frontend workflow provides `PORT` and `BASE_PATH`; use the managed workflow rather than starting Vite without them.
+- The photo preview uses a browser object URL for this prototype and is not uploaded to a server.
 
 ## Pointers
 
