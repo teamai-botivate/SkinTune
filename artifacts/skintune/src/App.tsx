@@ -24,8 +24,7 @@ const queryClient = new QueryClient();
 
 type Screen =
   | 'welcome' | 'home' | 'name' | 'profile' | 'age' | 'height' | 'consent' | 'photo' | 'appearance'
-  | 'body' | 'fit' | 'priorities' | 'style' | 'colors' | 'colors-avoid' | 'restrictions'
-  | 'occasion' | 'context' | 'impression' | 'budget' | 'review' | 'generating' | 'results'
+  | 'body-style' | 'colors-occasion' | 'final-prefs' | 'review' | 'generating' | 'results'
   | 'detail' | 'feedback' | 'settings';
 
 const initialProfile: SkinTuneProfile = {
@@ -35,10 +34,14 @@ const initialProfile: SkinTuneProfile = {
   occasion: '', occasionDetails: '', impression: [], budget: '',
 };
 
+// After the photo step, the remaining questions are grouped into three
+// section screens (each holding several related fields with checkbox-style
+// cards) instead of one screen per field — this cuts an 11-screen tap-through
+// down to 3 sections so filling in preferences after photo upload takes
+// meaningfully less time.
 const wizardScreens: Screen[] = [
-  'name', 'profile', 'age', 'height', 'consent', 'photo', 'appearance', 'body', 'fit',
-  'priorities', 'style', 'colors', 'colors-avoid', 'restrictions', 'occasion', 'context',
-  'impression', 'budget', 'review',
+  'name', 'profile', 'age', 'height', 'consent', 'photo', 'appearance',
+  'body-style', 'colors-occasion', 'final-prefs', 'review',
 ];
 const WIZARD_TOTAL = wizardScreens.length;
 
@@ -154,6 +157,67 @@ function MultiChoiceStep({ profile, update, field, step, eyebrow, title, body, o
   </StepShell>;
 }
 
+// A single field within a SectionStep: one heading + one choice grid (or a
+// free-text area), rather than its own full screen. Lets several related
+// questions live on one scrollable page with one Continue button, instead
+// of forcing a tap-through for every individual field.
+type SectionField =
+  | { kind: 'single'; field: keyof SkinTuneProfile; label: string; hint?: string; options: SelectOption[]; required?: boolean }
+  | { kind: 'multi'; field: keyof SkinTuneProfile; label: string; hint?: string; options: SelectOption[]; max?: number; required?: boolean }
+  | { kind: 'text'; field: keyof SkinTuneProfile; label: string; hint?: string; placeholder: string; required?: boolean };
+
+function isSectionFieldFilled(profile: SkinTuneProfile, def: SectionField): boolean {
+  if (def.required === false) return true;
+  const value = profile[def.field];
+  if (def.kind === 'multi') return Array.isArray(value) && value.length > 0;
+  return typeof value === 'string' ? value.trim().length > 0 : Boolean(value);
+}
+
+function SectionStep({ profile, update, step, eyebrow, title, body, fields, onNext, onBack, continueLabel = 'Continue' }: {
+  profile: SkinTuneProfile; update: (p: Partial<SkinTuneProfile>) => void; step: number;
+  eyebrow: string; title: string; body?: string; fields: SectionField[];
+  onNext: () => void; onBack: () => void; continueLabel?: string;
+}) {
+  const allRequiredFilled = fields.every((def) => def.required === false || isSectionFieldFilled(profile, def));
+  return <StepShell profile={profile} onBack={onBack} step={step}>
+    <Intro eyebrow={eyebrow} title={title} body={body}>
+      <div className="space-y-9">
+        {fields.map((def) => {
+          const optionalTag = def.required === false ? <span className="ml-1.5 font-normal normal-case text-muted-foreground">optional</span> : null;
+          if (def.kind === 'text') {
+            const value = (profile[def.field] as string) ?? '';
+            return <div key={def.field}>
+              <p className="mb-2 text-sm font-bold">{def.label}{optionalTag}</p>
+              {def.hint && <p className="mb-3 text-sm text-muted-foreground">{def.hint}</p>}
+              <textarea value={value} onChange={(e) => update({ [def.field]: e.target.value } as Partial<SkinTuneProfile>)} data-testid={`textarea-${String(def.field)}`} rows={4} placeholder={def.placeholder} className="focus-ring w-full resize-none rounded-2xl border border-border bg-card p-4 leading-relaxed outline-none placeholder:text-muted-foreground/55" />
+            </div>;
+          }
+          if (def.kind === 'single') {
+            const value = profile[def.field] as string;
+            return <div key={def.field}>
+              <p className="mb-3 text-sm font-bold">{def.label}{optionalTag}</p>
+              {def.hint && <p className="mb-3 -mt-2 text-sm text-muted-foreground">{def.hint}</p>}
+              <ChoiceGrid options={def.options} value={value} toggle={(v) => update({ [def.field]: v } as Partial<SkinTuneProfile>)} />
+            </div>;
+          }
+          const values = (profile[def.field] as string[]) || [];
+          const toggle = (v: string) => {
+            const atMax = def.max !== undefined && values.length >= def.max && !values.includes(v);
+            if (atMax) return;
+            update({ [def.field]: values.includes(v) ? values.filter((item) => item !== v) : [...values, v] } as Partial<SkinTuneProfile>);
+          };
+          return <div key={def.field}>
+            <p className="mb-3 text-sm font-bold">{def.label}{optionalTag}{def.max ? <span className="ml-1.5 font-normal normal-case text-muted-foreground">choose up to {def.max}</span> : null}</p>
+            {def.hint && <p className="mb-3 -mt-2 text-sm text-muted-foreground">{def.hint}</p>}
+            <ChoiceGrid multi options={def.options} value={values} toggle={toggle} />
+          </div>;
+        })}
+      </div>
+      <FooterActions onBack={onBack} onContinue={onNext} disabled={!allRequiredFilled} label={continueLabel} />
+    </Intro>
+  </StepShell>;
+}
+
 function HeightStep({ profile, update, step, eyebrow, title, body, onNext, onBack }: StepBaseProps) {
   return <StepShell profile={profile} onBack={onBack} step={step}>
     <Intro eyebrow={eyebrow} title={title} body={body}>
@@ -172,10 +236,6 @@ function NameStep({ profile, update, onNext, onBack }: { profile: SkinTuneProfil
 
 function ConsentStep({ profile, onNext, onBack }: { profile: SkinTuneProfile; onNext: () => void; onBack: () => void }) {
   return <StepShell profile={profile} onBack={onBack} step={5}><Intro eyebrow="05 / your choice" title="A portrait can make color guidance more precise." body="If you choose to share one, we’ll look at visible styling cues like light, contrast, and framing. SkinTune does not identify you, diagnose anything, or judge attractiveness."><div className="space-y-3"><div className="flex gap-4 rounded-2xl border border-border bg-card p-5"><ShieldCheck className="mt-0.5 shrink-0 text-accent" /><div><p className="font-semibold">You stay in control</p><p className="mt-1 text-sm leading-relaxed text-muted-foreground">Your photo stays in this browser prototype. Delete it any time from Privacy, plainly.</p></div></div><div className="flex gap-4 rounded-2xl border border-border bg-card p-5"><SlidersHorizontal className="mt-0.5 shrink-0 text-primary" /><div><p className="font-semibold">Guidance, not a verdict</p><p className="mt-1 text-sm leading-relaxed text-muted-foreground">Every suggestion is optional. Your taste and comfort come first. No medical or diagnostic claims are made.</p></div></div></div><FooterActions onBack={onBack} onContinue={onNext} label="I’m comfortable continuing" /></Intro></StepShell>;
-}
-
-function ContextStep({ profile, update, onNext, onBack }: { profile: SkinTuneProfile; update: (p: Partial<SkinTuneProfile>) => void; onNext: () => void; onBack: () => void }) {
-  return <StepShell profile={profile} onBack={onBack} step={16}><Intro eyebrow="16 / set the scene" title="Give us the useful details." body="A sentence is plenty. Think weather, venue, dress code, and anything you want to feel in the room."><textarea autoFocus value={profile.occasionDetails} onChange={(e) => update({ occasionDetails: e.target.value })} data-testid="textarea-occasion-details" rows={5} placeholder="It’s a late-spring dinner at a small restaurant. I want to look considered but not overdressed." className="focus-ring w-full resize-none rounded-2xl border border-border bg-card p-5 leading-relaxed outline-none placeholder:text-muted-foreground/55" /><FooterActions onBack={onBack} onContinue={onNext} disabled={!profile.occasionDetails.trim()} /></Intro></StepShell>;
 }
 
 // ---------- Photo analysis ----------
@@ -543,7 +603,7 @@ function SkinTune() {
   const currentLook = useMemo(() => generatedLooks.find((item) => item.id === detailId) || generatedLooks[0], [generatedLooks, detailId]);
 
   if (screen === 'welcome') return <Welcome onStart={() => go('name')} onPrivacy={() => go('settings')} />;
-  if (screen === 'home') return <Home profile={profile} savedLooks={savedLooks} generatedLooks={generatedLooks} onNew={() => { update({ photoUrl: '' }); go('name'); }} onResults={() => go(generatedLooks.length ? 'results' : 'generating')} onSettings={openSettings} onLook={(id) => { setDetailId(id); go('detail'); }} onQuickStart={(occasion) => { update({ occasion }); go('impression'); }} />;
+  if (screen === 'home') return <Home profile={profile} savedLooks={savedLooks} generatedLooks={generatedLooks} onNew={() => { update({ photoUrl: '' }); go('name'); }} onResults={() => go(generatedLooks.length ? 'results' : 'generating')} onSettings={openSettings} onLook={(id) => { setDetailId(id); go('detail'); }} onQuickStart={(occasion) => { update({ occasion }); go('final-prefs'); }} />;
   if (screen === 'settings') return <Settings profile={profile} deletedNotice={deletedNotice} onBack={() => go(profile.name ? 'home' : 'welcome')} onDelete={() => { localStorage.removeItem('skintune-profile'); localStorage.removeItem('skintune-saved-looks'); localStorage.removeItem('skintune-feedback'); setProfile(initialProfile); setDeletedNotice(true); setTimeout(() => go('welcome'), 900); }} />;
   if (screen === 'photo') return <PhotoPanel profile={profile} update={update} onContinue={() => go('appearance')} onBack={back} />;
   if (screen === 'results') return <Results profile={profile} looks={generatedLooks} savedLooks={savedLooks} onSave={(id) => setSavedLooks((old) => old.includes(id) ? old.filter((item) => item !== id) : [...old, id])} onLook={(id) => { setDetailId(id); go('detail'); }} onFeedback={() => go('feedback')} onBack={() => go('home')} />;
@@ -560,18 +620,31 @@ function SkinTune() {
     age: <SingleChoiceStep profile={profile} update={update} field="ageGroup" step={3} eyebrow="03 / a little context" title="Which age range feels right?" body="This helps us tune proportions and references. There's no wrong answer." options={ageGroupOptions} onNext={() => go('height')} onBack={back} />,
     height: <HeightStep profile={profile} update={update} step={4} eyebrow="04 / a little context" title="What's your height?" body="Optional — helps us tune proportion suggestions." onNext={() => go('consent')} onBack={back} />,
     consent: <ConsentStep profile={profile} onNext={() => go('photo')} onBack={back} />,
-    appearance: <AppearanceStep profile={profile} onNext={() => go('body')} onPhoto={() => go('photo')} onBack={back} />,
-    body: <SingleChoiceStep profile={profile} update={update} field="bodyBuild" step={8} eyebrow="08 / your canvas" title="How would you describe your build?" body="There's no right answer. Pick what feels most useful when you get dressed." options={bodyBuildOptions} onNext={() => go('fit')} onBack={back} />,
-    fit: <SingleChoiceStep profile={profile} update={update} field="fit" step={9} eyebrow="09 / your canvas" title="What fit feels like you?" body="Pick the silhouette you reach for most." options={fitOptions} onNext={() => go('priorities')} onBack={back} />,
-    priorities: <SingleChoiceStep profile={profile} update={update} field="priorities" step={10} eyebrow="10 / your canvas" title="What matters most right now?" body="Style, comfort, or a balance of both." options={priorityOptions} onNext={() => go('style')} onBack={back} />,
-    style: <MultiChoiceStep profile={profile} update={update} field="style" step={11} eyebrow="11 / your point of view" title="Which style worlds pull you in?" body="Choose as many as you like. Personal style is usually a good sentence, not a single word." options={styleOptions} onNext={() => go('colors')} onBack={back} />,
-    colors: <MultiChoiceStep profile={profile} update={update} field="colorsLove" step={12} eyebrow="12 / your color language" title="Which colors do you reach for?" body="Your favorites matter more than any color theory." options={colorLoveOptions} max={5} onNext={() => go('colors-avoid')} onBack={back} />,
-    'colors-avoid': <MultiChoiceStep profile={profile} update={update} field="colorsAvoid" step={13} eyebrow="13 / your color language" title="Anything you tend to avoid?" body="Optional. Skip this if you're open to exploring." options={colorAvoidOptions} optional onNext={() => go('restrictions')} onBack={back} />,
-    restrictions: <MultiChoiceStep profile={profile} update={update} field="restrictions" step={14} eyebrow="14 / make it wearable" title="Anything we should work around?" body="Choose anything that would help you enjoy wearing the suggestions. This is optional." options={restrictionOptions} optional onNext={() => go('occasion')} onBack={back} />,
-    occasion: <SingleChoiceStep profile={profile} update={update} field="occasion" step={15} eyebrow="15 / the moment" title="Where are you getting dressed for?" body="A look should support the room you're walking into, not distract you from being there." options={occasionOptions} onNext={() => go('context')} onBack={back} />,
-    context: <ContextStep profile={profile} update={update} onNext={() => go('impression')} onBack={back} />,
-    impression: <MultiChoiceStep profile={profile} update={update} field="impression" step={17} eyebrow="17 / the feeling" title="How do you want to come across?" body="Pick one or two. These words shape the balance between color, ease, and structure." options={impressionOptions} max={2} onNext={() => go('budget')} onBack={back} />,
-    budget: <SingleChoiceStep profile={profile} update={update} field="budget" step={18} eyebrow="18 / keep it real" title="What feels comfortable for this edit?" body="We'll use this as a guide for where to spend and where to save. It's never a test of taste." options={budgetOptions} onNext={() => go('review')} onBack={back} />,
+    appearance: <AppearanceStep profile={profile} onNext={() => go('body-style')} onPhoto={() => go('photo')} onBack={back} />,
+    'body-style': <SectionStep profile={profile} update={update} step={8} eyebrow="08 / your canvas" title="Your build, fit, and style." body="A few quick checkboxes — pick what fits, and we'll get moving."
+      fields={[
+        { kind: 'single', field: 'bodyBuild', label: 'How would you describe your build?', options: bodyBuildOptions },
+        { kind: 'single', field: 'fit', label: 'What fit feels like you?', options: fitOptions },
+        { kind: 'single', field: 'priorities', label: 'What matters most right now?', options: priorityOptions },
+        { kind: 'multi', field: 'style', label: 'Which style worlds pull you in?', hint: 'Choose as many as you like.', options: styleOptions },
+      ]}
+      onNext={() => go('colors-occasion')} onBack={back} />,
+    'colors-occasion': <SectionStep profile={profile} update={update} step={9} eyebrow="09 / colours & the moment" title="Colour, comfort, and where you're headed." body="Everything you need for this look, in one go."
+      fields={[
+        { kind: 'multi', field: 'colorsLove', label: 'Which colors do you reach for?', options: colorLoveOptions, max: 5 },
+        { kind: 'multi', field: 'colorsAvoid', label: 'Anything you tend to avoid?', options: colorAvoidOptions, required: false },
+        { kind: 'multi', field: 'restrictions', label: 'Anything we should work around?', options: restrictionOptions, required: false },
+        { kind: 'single', field: 'occasion', label: 'Where are you getting dressed for?', options: occasionOptions },
+        { kind: 'text', field: 'occasionDetails', label: 'Any details worth knowing?', placeholder: 'It’s a late-spring dinner at a small restaurant. I want to look considered but not overdressed.' },
+      ]}
+      onNext={() => go('final-prefs')} onBack={back} />,
+    'final-prefs': <SectionStep profile={profile} update={update} step={10} eyebrow="10 / the finishing touch" title="How you want to come across, and your budget." body="Last section — then we'll make your five looks."
+      fields={[
+        { kind: 'multi', field: 'impression', label: 'How do you want to come across?', options: impressionOptions, max: 2 },
+        { kind: 'single', field: 'budget', label: 'What feels comfortable for this edit?', options: budgetOptions },
+      ]}
+      continueLabel="Review my edit"
+      onNext={() => go('review')} onBack={back} />,
     review: <Review profile={profile} onEdit={(target) => go(target)} onSave={saveProfile} onBack={back} />,
   };
   return <>{screenContent[screen]}</>;
@@ -581,13 +654,11 @@ function Review({ profile, onEdit, onSave, onBack }: { profile: SkinTuneProfile;
   const rows: { label: string; value: string; target: Screen }[] = [
     { label: 'Appearance', value: `${profile.appearance.skinTone} · ${profile.appearance.undertone} undertone · ${profile.appearance.confidence}% confidence`, target: 'appearance' },
     { label: 'Profile', value: `${profile.pronouns} · ${profile.ageGroup}`, target: 'profile' },
-    { label: 'Build + fit', value: `${profile.bodyBuild} · ${profile.fit}${profile.priorities ? ` · ${profile.priorities}` : ''}`, target: 'body' },
-    { label: 'Style', value: profile.style.join(', '), target: 'style' },
-    { label: 'Colors', value: `Loves ${profile.colorsLove.join(', ')}${profile.colorsAvoid.length ? ` · avoids ${profile.colorsAvoid.join(', ')}` : ''}`, target: 'colors' },
-    { label: 'Moment', value: `${profile.occasion} · ${profile.occasionDetails}`, target: 'occasion' },
-    { label: 'Impression', value: `${profile.impression.join(', ')} · ${profile.budget}`, target: 'impression' },
+    { label: 'Build, fit & style', value: `${profile.bodyBuild} · ${profile.fit}${profile.priorities ? ` · ${profile.priorities}` : ''}${profile.style.length ? ` · ${profile.style.join(', ')}` : ''}`, target: 'body-style' },
+    { label: 'Colours & moment', value: `Loves ${profile.colorsLove.join(', ')}${profile.colorsAvoid.length ? ` · avoids ${profile.colorsAvoid.join(', ')}` : ''} · ${profile.occasion}`, target: 'colors-occasion' },
+    { label: 'Impression & budget', value: `${profile.impression.join(', ')} · ${profile.budget}`, target: 'final-prefs' },
   ];
-  return <StepShell profile={profile} onBack={onBack} step={19}><Intro eyebrow="19 / your edit, at a glance" title={`This sounds like ${profile.name}.`} body="Look it over, make any changes, then we'll make five complete looks around it.">
+  return <StepShell profile={profile} onBack={onBack} step={11}><Intro eyebrow="11 / your edit, at a glance" title={`This sounds like ${profile.name}.`} body="Look it over, make any changes, then we'll make five complete looks around it.">
     <div className="divide-y divide-border overflow-hidden rounded-[1.5rem] border border-border bg-card">{rows.map((row) => <div key={row.label} className="flex items-start justify-between gap-4 p-5"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[.13em] text-muted-foreground">{row.label}</p><p className="mt-1 line-clamp-2 text-sm leading-relaxed">{row.value}</p></div><button type="button" onClick={() => onEdit(row.target)} data-testid={`button-edit-${row.label.toLowerCase().replace(' ', '-')}`} className="focus-ring inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold text-primary hover:bg-secondary"><Pencil size={13} /> Edit</button></div>)}</div>
     <FooterActions onBack={onBack} onContinue={onSave} label="✨ Make my five looks" />
   </Intro></StepShell>;

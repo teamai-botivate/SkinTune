@@ -41,17 +41,32 @@ The **real product code** lives entirely in `artifacts/skintune/src/`. Read
   the state-machine approach is deliberate and keeps the WhatsApp-style
   one-question-at-a-time flow simple.
 - **Wizard steps are generic, not duplicated per field.** `SingleChoiceStep`,
-  `MultiChoiceStep`, and `HeightStep` (in `App.tsx`) are reused across every
-  onboarding screen, driven by option lists in `src/data/options.ts`. Don't
-  hand-roll a new one-off step component for a single-choice or multi-choice
-  field — extend the generic step with a new entry in `screenContent`
-  instead.
-- **Single-choice steps auto-advance.** Tapping an option in
-  `SingleChoiceStep` both selects it and calls `onNext()` after a short delay
-  — this is intentional (tap → next, no separate "Continue" tap, no need to
-  scroll to a footer button). The footer Continue button is kept only as a
-  fallback for keyboard/assistive-tech users. Multi-choice steps do NOT
-  auto-advance (the user needs to pick more than one thing).
+  `MultiChoiceStep`, `HeightStep`, and `SectionStep` (in `App.tsx`) are
+  reused across every onboarding screen, driven by option lists in
+  `src/data/options.ts`. Don't hand-roll a new one-off step component for a
+  single-choice or multi-choice field — extend a generic step (or a
+  section's `fields` array) with a new entry instead.
+- **Single-choice steps auto-advance; sections don't.** Tapping an option in
+  a standalone `SingleChoiceStep` both selects it and calls `onNext()` after
+  a short delay — this is intentional (tap → next, no separate "Continue"
+  tap). The footer Continue button is kept only as a fallback for
+  keyboard/assistive-tech users. Fields inside a `SectionStep` never
+  auto-advance, even single-choice ones — a section holds several questions
+  on one page, so advancing on the first tap would skip the rest before the
+  user could answer them. One Continue button per section, gated on that
+  section's required fields.
+- **After the photo step, questions are grouped into 3 section screens, not
+  11 individual ones.** `body-style` (build, fit, priorities, style),
+  `colors-occasion` (colours loved/avoided, restrictions, occasion,
+  occasion details), `final-prefs` (impression, budget) — each is one
+  `SectionStep` call with a `fields` array, not separate `Screen` entries.
+  This exists specifically to cut onboarding time after photo upload; if a
+  new field belongs conceptually with one of these three groups, add it to
+  that section's `fields` array rather than creating a new standalone
+  screen. `SectionField`'s `kind: 'single' | 'multi' | 'text'` covers
+  everything currently needed (a plain textarea uses `'text'`); required
+  defaults to `true` — pass `required: false` for optional fields (e.g.
+  colours to avoid, restrictions).
 - **Photo analysis** (`PhotoPanel` in `App.tsx`) shows staged "Analyzing…"
   copy (`src/data/photo-diagnostics.ts`), then either a good-photo appearance
   read or a specific, explainable problem (Problem / Why it matters / How to
