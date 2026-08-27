@@ -221,7 +221,10 @@ function PhotoPanel({ profile, update, onContinue, onBack }: { profile: SkinTune
     <div className="mt-8 grid gap-6 md:grid-cols-[.84fr_1.16fr]">
       <div className="relative flex min-h-[300px] flex-col items-center justify-center overflow-hidden rounded-[1.5rem] border border-border bg-secondary/60 p-6">
         {profile.photoUrl ? <img src={profile.photoUrl} alt="Your uploaded portrait" data-testid="img-upload-preview" className="absolute inset-0 size-full object-cover" /> : <><div className="grid size-24 place-items-center rounded-full bg-card text-primary"><Camera size={34} /></div><p className="mt-4 text-center text-sm font-semibold">A natural, shoulders-up photo</p><p className="mt-1 text-center text-xs text-muted-foreground">No posing required.</p></>}
-        <label className="focus-ring absolute bottom-4 inline-flex cursor-pointer items-center gap-2 rounded-full bg-card px-4 py-2.5 text-sm font-bold shadow-lg"><Upload size={15} /> {profile.photoUrl ? 'Choose another' : 'Choose a photo'}<input type="file" accept="image/*" onChange={pickFile} data-testid="input-photo" className="sr-only" /></label>
+        <div className="absolute bottom-4 flex flex-wrap justify-center gap-2 px-4">
+          <label className="focus-ring inline-flex cursor-pointer items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground shadow-lg"><Camera size={15} /> Take a Selfie<input type="file" accept="image/*" capture="user" onChange={pickFile} data-testid="input-photo-camera" className="sr-only" /></label>
+          <label className="focus-ring inline-flex cursor-pointer items-center gap-2 rounded-full bg-card px-4 py-2.5 text-sm font-bold shadow-lg"><Upload size={15} /> {profile.photoUrl ? 'Choose another' : 'Choose from Gallery'}<input type="file" accept="image/*" onChange={pickFile} data-testid="input-photo-gallery" className="sr-only" /></label>
+        </div>
       </div>
 
       <div className={`rounded-[1.5rem] border p-6 ${analyzing ? 'border-border bg-secondary/50' : diagnostic.good ? 'border-accent/30 bg-accent/8' : 'border-primary/25 bg-primary/5'}`}>
