@@ -42,8 +42,17 @@ app.use(
   }),
 );
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// SkinTuneProfile.photoUrl is a base64 data URL of the user's uploaded
+// photo (see artifacts/skintune/src/App.tsx's PhotoPanel) and is sent as
+// part of the /api/recommendations and /api/generate-images request
+// bodies. Express's default json/urlencoded limit is 100kb, which a real
+// photo blows past immediately (a base64 data URL runs ~33% larger than
+// the original file) and previously failed with a silent-looking 413 that
+// only the frontend's mock-data fallback masked. 15mb comfortably covers a
+// typical phone photo with headroom.
+const JSON_BODY_LIMIT = "15mb";
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
+app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
 
 app.use("/api", router);
 

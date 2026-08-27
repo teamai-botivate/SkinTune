@@ -102,6 +102,22 @@ run dev` can run side by side locally.
 `GenerationResult` are the client-facing contracts. Keep these stable if you
 add a real backend.
 
+**Every `SkinTuneProfile` field's array-vs-string shape must match how it's
+actually populated in the wizard.** `App.tsx`'s generic `SingleChoiceStep`
+writes a plain `string`; `MultiChoiceStep` writes a `string[]`. The
+`update({ [field]: v } as Partial<SkinTuneProfile>)` cast inside both
+bypasses TypeScript's per-field checking, so pairing the wrong step
+component with a field's declared type will NOT be caught by `tsc` — it
+will build and typecheck cleanly, then crash at runtime the first time
+something calls `.join()` (or similar) on what's actually a string, or
+tries to read a string as an array. This happened once in production (the
+Review screen crashed on `profile.fit.join(...)` after `fit` was switched
+from multi- to single-select) — when adding or changing a wizard field,
+manually re-check `types.ts`, `initialProfile`, every place that field is
+read (grep for `.fieldName`), AND `artifacts/api-server/src/lib/
+skintune-schemas.ts`'s mirrored Zod schema, which is a second, independent
+place this same mismatch can hide.
+
 ### State / persistence
 
 Frontend-only prototype. Three `localStorage` keys, all in `App.tsx`:
@@ -139,6 +155,19 @@ The image:
 Render sets `$PORT` itself; `artifacts/api-server/src/index.ts` already reads
 `process.env.PORT` (throws clearly if missing) — nothing else to configure.
 `STATIC_DIR` is baked into the image as `/app/public` by the Dockerfile.
+
+**Request body size:** `SkinTuneProfile.photoUrl` is a base64 data URL of
+the user's photo and can be several hundred KB to a few MB. The frontend's
+`recommendation-engine.ts`/`image-generation.ts` deliberately strip
+`photoUrl` before POSTing to `/api/recommendations`/`/api/generate-images`
+(neither route uses the raw photo — only the already-derived
+`appearance.skinTone`/`undertone`), and `photoUrl` is `.optional()` in
+`skintune-schemas.ts` to match. `app.ts` also raises Express's default
+100kb JSON body limit to 15mb as defense in depth. If a future route
+genuinely needs to receive the photo, keep both fixes in mind — a request
+that "should" be small can silently balloon if photoUrl sneaks back in, and
+the previous 100kb default failed as an opaque 413 with no obvious frontend
+error until the network tab was checked.
 
 **Set `OPENAI_API_KEY` as a Render environment variable** on the service
 (Render dashboard → service → Environment) for real AI recommendations and

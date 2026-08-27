@@ -164,10 +164,15 @@ export const getLookRecommendations = async (
   profile: SkinTuneProfile,
 ): Promise<LookRecommendation[]> => {
   try {
+    // The recommendation prompt only ever uses the already-derived
+    // appearance.skinTone/undertone, never the raw photo — strip photoUrl
+    // (a multi-megabyte base64 data URL) before sending so this call stays
+    // small and fast regardless of body-size limits.
+    const { photoUrl: _photoUrl, ...profileForRequest } = profile;
     const res = await fetch('/api/recommendations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile }),
+      body: JSON.stringify({ profile: profileForRequest }),
     });
     if (!res.ok) throw new Error(`Recommendations request failed: ${res.status}`);
     const data = (await res.json()) as { recommendations: LookRecommendation[] };

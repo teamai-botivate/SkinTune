@@ -10,7 +10,10 @@ export const SkinTuneProfileSchema = z.object({
   pronouns: z.string(),
   ageGroup: z.string(),
   height: z.string(),
-  photoUrl: z.string(),
+  // Optional here: the frontend deliberately omits the raw photo (a
+  // multi-megabyte base64 data URL) from AI request bodies — neither route
+  // uses it, only the already-derived appearance.skinTone/undertone below.
+  photoUrl: z.string().optional(),
   appearance: z.object({
     skinTone: z.string(),
     undertone: z.string(),

@@ -37,10 +37,15 @@ export const generateLookImages = async (
   context: OccasionContext,
 ): Promise<LookRecommendation[]> => {
   try {
+    // Same as recommendation-engine.ts: buildLookImagePrompt (server-side)
+    // never reads the raw photo, only appearance.skinTone/undertone — strip
+    // it before sending so this request stays well under any body-size
+    // limit regardless of photo resolution.
+    const { photoUrl: _photoUrl, ...profileForRequest } = profile;
     const res = await fetch('/api/generate-images', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recommendations, profile, context }),
+      body: JSON.stringify({ recommendations, profile: profileForRequest, context }),
     });
     if (!res.ok) throw new Error(`Image generation request failed: ${res.status}`);
     const data = (await res.json()) as { recommendations: LookRecommendation[] };
