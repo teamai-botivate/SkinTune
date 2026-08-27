@@ -72,6 +72,19 @@ export default defineConfig({
     fs: {
       strict: true,
     },
+    // In local dev the frontend and API server run as two separate
+    // processes/ports. Proxy /api so services/recommendation-engine.ts and
+    // services/image-generation.ts can call same-origin '/api/...' paths in
+    // both dev and the single-service production deployment, with no
+    // environment-specific branching in application code. Point this at a
+    // local `pnpm --filter @workspace/api-server run dev` (default port
+    // 5000) or override with API_PROXY_TARGET.
+    proxy: {
+      '/api': {
+        target: process.env.API_PROXY_TARGET ?? 'http://localhost:5000',
+        changeOrigin: true,
+      },
+    },
   },
   preview: {
     port,

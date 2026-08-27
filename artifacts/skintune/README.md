@@ -51,15 +51,15 @@ Single-choice wizard screens (pronouns, age, body build, fit, priority, occasion
 Recommendation Engine  →  5 LookRecommendation objects  →  Image Generation Service  →  5 images
 ```
 
-`src/services/recommendation-engine.ts` exposes `getLookRecommendations(profile)`. It owns the *styling decision* — outfit, colour, jewellery, hairstyle, makeup, accessories, and the reasoning behind each look. The current implementation returns a curated static set of five looks with full complete-look detail.
+`src/services/recommendation-engine.ts` exposes `getLookRecommendations(profile)`. It calls the backend's `POST /api/recommendations` (GPT-4o with strict JSON-schema structured output) to produce the *styling decision* — outfit, colour, jewellery, hairstyle, makeup, accessories, and the reasoning behind each of the 5 looks. If that call fails (no key configured, network issue, etc.) it falls back to a curated static mock set.
 
-`src/services/image-generation.ts` exposes `generateLookImages(recommendations, profile, context)`. It owns *visualising* those decisions — nothing more. The current implementation simulates provider latency and returns the recommendations with their placeholder `imageUrl`s unchanged; `buildLookImagePrompt()` shows how a look's structured data becomes an image prompt.
+`src/services/image-generation.ts` exposes `generateLookImages(recommendations, profile, context)`. It calls the backend's `POST /api/generate-images` (OpenAI `gpt-image-2`) to *visualise* those decisions — nothing more. On failure it returns the recommendations with their placeholder `imageUrl`s unchanged rather than blocking the results screen.
 
-**This separation is intentional and should be preserved:** an image model should visualize a styling decision, never invent its own. UI components import only these two functions — never a provider SDK directly.
+**This separation is intentional and should be preserved:** an image model should visualize a styling decision, never invent its own. UI components import only these two functions — never a provider SDK directly, and never an API key (the key lives only in `artifacts/api-server`).
 
-### Connecting a real image provider (e.g. GPT Image 2) later
+### The AI is already connected
 
-Implement the provider call inside `generateLookImages()` in `src/services/image-generation.ts`, keeping the same function signature (`(recommendations, profile, context) => Promise<LookRecommendation[]>`) and having it return each look with a real `imageUrl`. `buildLookImagePrompt()` is the natural place to tune the prompt template. No UI or recommendation-engine changes should be required.
+`artifacts/api-server/src/routes/recommendations.ts` and `.../generate-images.ts` hold the actual OpenAI calls. Set `OPENAI_API_KEY` (see `artifacts/api-server/.env.example`) to enable them — locally, or as a Render environment variable in production. `OPENAI_TEXT_MODEL` (default `gpt-4o`) and `OPENAI_IMAGE_MODEL` (default `gpt-image-2`) are overridable if you want to point at different models later.
 
 ## Continuing the project
 

@@ -152,15 +152,31 @@ export const mockLooks: LookRecommendation[] = [
 
 /**
  * Produce 5 complete-look recommendations for the given profile.
- * Mock implementation: returns a curated static set. A real implementation
- * would use the profile (appearance, body, taste, occasion, budget) to select
- * or generate genuinely personalized strategies, but must keep this signature
- * so the image-generation layer and UI are unaffected.
+ *
+ * Calls the backend's /api/recommendations route, which uses GPT-4o to
+ * generate 5 genuinely personalized styling strategies from the profile
+ * (appearance, body, taste, occasion, budget). If that call fails for any
+ * reason (no OPENAI_API_KEY configured, network issue, backend not
+ * deployed yet, etc.) this falls back to the curated static mock set so the
+ * UI always has something to show — never a dead end.
  */
 export const getLookRecommendations = async (
-  _profile: SkinTuneProfile,
+  profile: SkinTuneProfile,
 ): Promise<LookRecommendation[]> => {
-  // Simulated "thinking" latency for the recommendation step.
-  await new Promise((resolve) => setTimeout(resolve, 400));
-  return mockLooks;
+  try {
+    const res = await fetch('/api/recommendations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile }),
+    });
+    if (!res.ok) throw new Error(`Recommendations request failed: ${res.status}`);
+    const data = (await res.json()) as { recommendations: LookRecommendation[] };
+    if (!data.recommendations?.length) throw new Error('Empty recommendations response');
+    return data.recommendations;
+  } catch (err) {
+    console.warn('Falling back to mock recommendations:', err);
+    // Simulated "thinking" latency so the fallback still feels intentional.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return mockLooks;
+  }
 };

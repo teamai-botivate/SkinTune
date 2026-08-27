@@ -65,21 +65,36 @@ The **real product code** lives entirely in `artifacts/skintune/src/`. Read
 
 Owns the *styling decision*: given a `SkinTuneProfile`, returns 5
 `LookRecommendation` objects (outfit, colour, jewellery, hairstyle, makeup,
-accessories, reasoning). Currently a mock returning a curated static set.
+accessories, reasoning). Calls the backend's `POST /api/recommendations`
+(GPT-4o, strict JSON-schema structured output — see
+`artifacts/api-server/src/routes/recommendations.ts`); on any failure (no
+`OPENAI_API_KEY` configured, network issue, provider error) it falls back to
+a curated static mock set so the UI never dead-ends.
 
 ### `src/services/image-generation.ts`
 
 Owns *visualising* those decisions. `generateLookImages(recommendations,
-profile, context)` takes the recommendation engine's output and would call an
-image provider (e.g. GPT Image 2) to produce real images — currently mocked
-(simulated latency, returns the recommendations with their placeholder
-`imageUrl`s unchanged). `buildLookImagePrompt()` shows how structured look
-data becomes a prompt; a real provider adapter should build on this rather
-than letting the image model invent its own styling strategy.
+profile, context)` calls the backend's `POST /api/generate-images` (OpenAI
+`gpt-image-2` — see `artifacts/api-server/src/routes/generate-images.ts`),
+which converts each look's structured data into a prompt and returns a real
+image (base64 data URL) per look. On failure for an individual look, that
+look keeps its existing placeholder `imageUrl` rather than failing the whole
+batch; on a full request failure, all recommendations are returned unchanged
+so the results screen still renders.
 
-**To connect a real image provider later:** implement the provider call
-inside `generateLookImages()` (keep the same signature) and have it return
-each look with a real `imageUrl`. No UI changes should be required.
+**The OpenAI API key lives only in `artifacts/api-server`**, read from
+`OPENAI_API_KEY` (see `src/lib/openai-client.ts`). It is never sent to or
+readable from the browser — the frontend only ever calls same-origin
+`/api/recommendations` and `/api/generate-images`. Model names are
+overridable via `OPENAI_TEXT_MODEL` (default `gpt-4o`) and
+`OPENAI_IMAGE_MODEL` (default `gpt-image-2`).
+
+Local dev: copy `artifacts/api-server/.env.example` to `.env` (gitignored)
+and fill in `OPENAI_API_KEY`, or set it directly in your shell. The frontend
+dev server proxies `/api/*` to `http://localhost:5000` by default (see
+`API_PROXY_TARGET` in `artifacts/skintune/vite.config.ts`) so both `pnpm
+--filter @workspace/api-server run dev` and `pnpm --filter @workspace/skintune
+run dev` can run side by side locally.
 
 ### Data model
 
@@ -124,6 +139,12 @@ The image:
 Render sets `$PORT` itself; `artifacts/api-server/src/index.ts` already reads
 `process.env.PORT` (throws clearly if missing) — nothing else to configure.
 `STATIC_DIR` is baked into the image as `/app/public` by the Dockerfile.
+
+**Set `OPENAI_API_KEY` as a Render environment variable** on the service
+(Render dashboard → service → Environment) for real AI recommendations and
+images to work in production. Without it, both `/api/recommendations` and
+`/api/generate-images` return a 502 and the frontend transparently falls
+back to mock data — the app still runs, just without real AI output.
 
 **Do not add a `render.yaml`** unless the user asks for one — the dashboard
 Docker service + this Dockerfile is the whole deployment story.
