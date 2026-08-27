@@ -30,7 +30,7 @@ type Screen =
 const initialProfile: SkinTuneProfile = {
   name: '', pronouns: '', ageGroup: '', height: '', photoUrl: '', bodyBuild: '',
   appearance: { skinTone: '', undertone: '', confidence: 0, contrast: 'Medium' },
-  fit: [], priorities: [], style: [], colorsLove: [], colorsAvoid: [], restrictions: [],
+  fit: '', priorities: '', style: [], colorsLove: [], colorsAvoid: [], restrictions: [],
   occasion: '', occasionDetails: '', impression: [], budget: '',
 };
 
@@ -560,7 +560,7 @@ function Review({ profile, onEdit, onSave, onBack }: { profile: SkinTuneProfile;
   const rows: { label: string; value: string; target: Screen }[] = [
     { label: 'Appearance', value: `${profile.appearance.skinTone} · ${profile.appearance.undertone} undertone · ${profile.appearance.confidence}% confidence`, target: 'appearance' },
     { label: 'Profile', value: `${profile.pronouns} · ${profile.ageGroup}`, target: 'profile' },
-    { label: 'Build + fit', value: `${profile.bodyBuild} · ${profile.fit.join(', ')}`, target: 'body' },
+    { label: 'Build + fit', value: `${profile.bodyBuild} · ${profile.fit}${profile.priorities ? ` · ${profile.priorities}` : ''}`, target: 'body' },
     { label: 'Style', value: profile.style.join(', '), target: 'style' },
     { label: 'Colors', value: `Loves ${profile.colorsLove.join(', ')}${profile.colorsAvoid.length ? ` · avoids ${profile.colorsAvoid.join(', ')}` : ''}`, target: 'colors' },
     { label: 'Moment', value: `${profile.occasion} · ${profile.occasionDetails}`, target: 'occasion' },

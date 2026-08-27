@@ -18,8 +18,11 @@ export const SkinTuneProfileSchema = z.object({
     contrast: z.string(),
   }),
   bodyBuild: z.string(),
-  fit: z.array(z.string()),
-  priorities: z.array(z.string()),
+  // Single-select fields (Fitted/Regular/Relaxed/Oversized;
+  // Style First/Comfort First/Balance Both) — must stay in sync with
+  // artifacts/skintune/src/types.ts's SkinTuneProfile.
+  fit: z.string(),
+  priorities: z.string(),
   style: z.array(z.string()),
   colorsLove: z.array(z.string()),
   colorsAvoid: z.array(z.string()),

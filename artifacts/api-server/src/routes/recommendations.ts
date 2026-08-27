@@ -29,8 +29,8 @@ function buildUserPrompt(profile: SkinTuneProfile): string {
 - Styling for: ${profile.pronouns || "not specified"}, age group ${profile.ageGroup || "not specified"}, height ${profile.height || "not specified"}
 - Appearance: skin tone ${profile.appearance.skinTone || "unspecified"}, ${profile.appearance.undertone || "unspecified"} undertone, contrast ${profile.appearance.contrast || "unspecified"}
 - Body build: ${profile.bodyBuild || "not specified"}
-- Fit preference: ${profile.fit.join(", ") || "no strong preference"}
-- Priorities: ${profile.priorities.join(", ") || "not specified"}
+- Fit preference: ${profile.fit || "no strong preference"}
+- Priorities: ${profile.priorities || "not specified"}
 - Style worlds: ${profile.style.join(", ") || "open to suggestion"}
 - Colours loved: ${profile.colorsLove.join(", ") || "no strong favourites stated"}
 - Colours to avoid: ${profile.colorsAvoid.join(", ") || "none stated"}

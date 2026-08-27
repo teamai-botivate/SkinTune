@@ -25,8 +25,10 @@ export type SkinTuneProfile = {
   photoUrl: string;
   appearance: AppearanceProfile;
   bodyBuild: string;
-  fit: string[];
-  priorities: string[];
+  /** Single-select: Fitted / Regular / Relaxed / Oversized. */
+  fit: string;
+  /** Single-select: Style First / Comfort First / Balance Both. */
+  priorities: string;
   style: string[];
   colorsLove: string[];
   colorsAvoid: string[];
