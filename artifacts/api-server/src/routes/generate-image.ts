@@ -39,6 +39,13 @@ type OccasionContext = { occasion: string; details: string };
  * camera and a confident straight-on gaze regardless of how the input
  * photo was angled — only the FACE is preserved, not the camera angle or
  * head tilt it happened to be photographed at.
+ *
+ * Fit/drape is called out explicitly too: "preserve their build" alone
+ * only prevents the model from altering body shape — it says nothing about
+ * whether the generated garments actually fit that build correctly. The
+ * dedicated fit instruction below asks for the outfit to look tailored to
+ * this specific person's proportions (shoulder line, sleeve/hem length,
+ * fabric fall), not merely worn.
  */
 function buildFlatteringInstruction(pronouns: string): string {
   const normalized = pronouns.toLowerCase();
@@ -67,9 +74,10 @@ function buildLookEditPrompt(
     `Makeup: ${look.makeup}`,
     `Accessories: ${look.accessories}`,
     profile.bodyBuild ? `Preserve their natural build (${profile.bodyBuild}) — do not alter body shape.` : "",
+    `The outfit must fit this exact person correctly: the garments should drape, sit, and follow their actual body shape and proportions as if properly tailored for them — correct shoulder line, sleeve and hem length, and natural fabric fall for their build. It should never look pasted on, stretched, floating away from the body, or cut for a different body shape. This should read as clothing that genuinely suits and flatters this specific person, not a generic outfit overlaid on them.`,
     context.details ? `Context: ${context.details}` : "",
     "Natural lighting, tasteful and supportive, no beauty filter, no visible text or watermark. Professional editorial photo quality, magazine-worthy composition, flattering pose and head angle — this should look like a genuinely great photo of this person.",
-    "Reminder: keep the same face and identity as the input photo, but with a confident eye-level pose and head angle — this is a clothing, pose, and styling edit, not a new person and not a literal copy of the original snapshot's camera angle.",
+    "Reminder: keep the same face and identity as the input photo, but with a confident eye-level pose and head angle, and an outfit that fits and suits their actual body correctly — this is a clothing, pose, and styling edit, not a new person and not a literal copy of the original snapshot's camera angle.",
   ];
   return parts.filter(Boolean).join(" ");
 }
