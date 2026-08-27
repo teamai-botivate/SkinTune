@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/toaster';
@@ -179,10 +179,91 @@ function ContextStep({ profile, update, onNext, onBack }: { profile: SkinTunePro
 
 // ---------- Photo analysis ----------
 
+// In-page camera capture. Deliberately avoids the native
+// <input capture="user"> handoff to the OS camera app — on a meaningful
+// share of mobile browsers that handoff either opens the wrong picker or
+// silently fails to hand the captured photo back to the input's change
+// event once the camera app closes. A live getUserMedia preview plus an
+// explicit in-app capture button keeps the whole flow inside this page, so
+// there's nothing to hand back and nothing that can silently drop the shot.
+function CameraCapture({ onCapture, onClose }: { onCapture: (dataUrl: string) => void; onClose: () => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError('Camera access isn’t available in this browser. Try “Choose from Gallery” instead.');
+      return;
+    }
+    navigator.mediaDevices
+      .getUserMedia({ video: { facingMode: 'user' }, audio: false })
+      .then((stream) => {
+        if (cancelled) { stream.getTracks().forEach((track) => track.stop()); return; }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.onloadedmetadata = () => setReady(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setError('We couldn’t access your camera. Check your browser’s camera permission, or use “Choose from Gallery” instead.');
+      });
+    return () => {
+      cancelled = true;
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
+  const capture = () => {
+    const video = videoRef.current;
+    if (!video || !ready) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    // Mirror horizontally so the captured photo matches what the user saw
+    // in the front-camera preview (unmirrored feels visually "wrong" to
+    // most people for a selfie).
+    ctx.translate(canvas.width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    onCapture(canvas.toDataURL('image/jpeg', 0.92));
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/90 p-4" role="dialog" aria-modal="true" aria-label="Take a selfie">
+      <button type="button" onClick={onClose} data-testid="button-camera-close" aria-label="Close camera" className="focus-ring absolute right-4 top-4 grid size-11 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"><X size={20} /></button>
+      {error ? (
+        <div className="max-w-sm rounded-2xl bg-card p-6 text-center">
+          <p className="font-semibold">Camera unavailable</p>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{error}</p>
+          <button type="button" onClick={onClose} data-testid="button-camera-dismiss" className="focus-ring mt-5 rounded-full bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground">Got it</button>
+        </div>
+      ) : (
+        <>
+          <div className="relative aspect-[3/4] w-full max-w-sm overflow-hidden rounded-[1.5rem] bg-black">
+            <video ref={videoRef} autoPlay playsInline muted className="size-full scale-x-[-1] object-cover" data-testid="video-camera-preview" />
+            {!ready && <div className="absolute inset-0 grid place-items-center text-sm text-white/70">Starting camera…</div>}
+          </div>
+          <button type="button" onClick={capture} disabled={!ready} data-testid="button-camera-capture" aria-label="Capture photo" className="focus-ring mt-6 grid size-16 place-items-center rounded-full border-4 border-white bg-white/20 disabled:opacity-40">
+            <span className="size-12 rounded-full bg-white" />
+          </button>
+          <p className="mt-4 text-sm text-white/70">Center your face, then tap to capture.</p>
+        </>
+      )}
+    </div>
+  );
+}
+
 function PhotoPanel({ profile, update, onContinue, onBack }: { profile: SkinTuneProfile; update: (p: Partial<SkinTuneProfile>) => void; onContinue: () => void; onBack: () => void }) {
   const [status, setStatus] = useState<PhotoStatus>(profile.appearance.confidence ? 'good' : 'low-confidence');
   const [analyzing, setAnalyzing] = useState(false);
   const [stageIndex, setStageIndex] = useState(0);
+  const [showCamera, setShowCamera] = useState(false);
   const diagnostic = photoDiagnostics[status];
 
   const runAnalysis = (nextStatus: PhotoStatus = 'good') => {
@@ -217,12 +298,19 @@ function PhotoPanel({ profile, update, onContinue, onBack }: { profile: SkinTune
     setStatus('low-confidence');
   };
 
+  const handleCapture = (dataUrl: string) => {
+    setShowCamera(false);
+    update({ photoUrl: dataUrl });
+    runAnalysis('good');
+  };
+
   return <Shell profile={profile} onBack={onBack} onSettings={onBack} step={6} total={WIZARD_TOTAL}><div className="mx-auto max-w-3xl"><Intro eyebrow="06 / a gentle check" title="A photo helps us notice the details." body="This is only used to tune color and proportion suggestions. It is not a beauty score, identity check, or medical assessment.">
+    {showCamera && <CameraCapture onCapture={handleCapture} onClose={() => setShowCamera(false)} />}
     <div className="mt-8 grid gap-6 md:grid-cols-[.84fr_1.16fr]">
       <div className="relative flex min-h-[300px] flex-col items-center justify-center overflow-hidden rounded-[1.5rem] border border-border bg-secondary/60 p-6">
         {profile.photoUrl ? <img src={profile.photoUrl} alt="Your uploaded portrait" data-testid="img-upload-preview" className="absolute inset-0 size-full object-cover" /> : <><div className="grid size-24 place-items-center rounded-full bg-card text-primary"><Camera size={34} /></div><p className="mt-4 text-center text-sm font-semibold">A natural, shoulders-up photo</p><p className="mt-1 text-center text-xs text-muted-foreground">No posing required.</p></>}
         <div className="absolute bottom-4 flex flex-wrap justify-center gap-2 px-4">
-          <label className="focus-ring inline-flex cursor-pointer items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground shadow-lg"><Camera size={15} /> Take a Selfie<input type="file" accept="image/*" capture="user" onChange={pickFile} data-testid="input-photo-camera" className="sr-only" /></label>
+          <button type="button" onClick={() => setShowCamera(true)} data-testid="button-open-camera" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground shadow-lg"><Camera size={15} /> Take a Selfie</button>
           <label className="focus-ring inline-flex cursor-pointer items-center gap-2 rounded-full bg-card px-4 py-2.5 text-sm font-bold shadow-lg"><Upload size={15} /> {profile.photoUrl ? 'Choose another' : 'Choose from Gallery'}<input type="file" accept="image/*" onChange={pickFile} data-testid="input-photo-gallery" className="sr-only" /></label>
         </div>
       </div>
