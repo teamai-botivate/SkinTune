@@ -248,21 +248,47 @@ styled in a fitted evening dress, the addendum-assisted result correctly
 fit the actual narrow shoulder line and body proportions, not a generic
 template.
 
-**Pose, expression, and background vary per look — this was a real
-production bug.** Previously every one of the 5 looks got the exact same
-fixed pose/expression sentence ("eye-level, chin level, confident
-expression"), so all 5 results read as the same photo with different
-clothes rather than 5 distinct moments. `buildPoseAndEnvironmentInstruction`
-in `generate-image.ts` now derives a pose/expression/background family
-deterministically from each look's own `category`/`title`/`note`/`reasoning`
-text and the occasion (e.g. candid relaxed smile for casual/everyday,
-poised composed stance for minimal/elegant, statement energy for
-glamorous/bold, professional-warm for office/interview) — no AI call, no
-failure mode, always present. `writeStylingAddendum` can layer a more
-specific pose suggestion on top since it sees the actual photo. Verified
-live: a casual "Everyday" look generated a genuinely candid, relaxed-smile,
-café-backdrop result, visibly different in energy from the earlier
-formal/office test photos.
+**Pose and expression are decided by the vision agent looking at the
+actual face, not by a rule-based template — this went through two
+iterations, both real production bugs.**
+
+The first version had one fixed pose/expression sentence shared by all 5
+looks ("eye-level, chin level, confident expression"), so all 5 results
+read as the same photo with different clothes. The fix at the time added
+`buildPoseAndEnvironmentInstruction`, which keyword-matched each look's
+`category`/`title`/`note`/`reasoning` text against a small set of
+pose "families" (candid smile for casual, poised stance for elegant,
+etc.) — but in practice this was still too generic/formulaic to visibly
+change the output; expressions kept coming out nearly identical across
+looks regardless of which family matched, and the failure mode was
+explicitly reported by the user as a "cut-paste face" feel — the face
+reading as pasted onto a different pose rather than one coherent photo.
+
+The current fix removes the keyword-matched template as the primary
+mechanism. `writeStylingAddendum` in `generate-image.ts` is now the
+PRIMARY decision-maker for pose/expression/body-language: its system
+prompt explicitly instructs the model to act as a photographer/stylist,
+genuinely study THIS person's actual face (resting expression, features)
+in the uploaded photo, and decide a pose/expression that suits both that
+face and this specific look's mood — not fill in a template slot.
+`temperature` was raised from 0.5 to 0.8 to reduce convergence toward one
+"safe" answer across the 5 parallel per-look calls. The old
+`buildPoseAndEnvironmentInstruction` was demoted to
+`buildFallbackPoseInstruction` — a deliberately bare generic line, used
+ONLY when the addendum agent fails or no photo was provided. Do not
+resurrect keyword-matching as the primary mechanism; it was tried and
+didn't work — see git history around this fix. `buildLookEditPrompt` also
+now has an explicit anti-"cut-paste" instruction (the face must blend
+continuously into the neck/jaw/shoulders with consistent lighting/angle,
+"one single photograph... not a composite") addressing that failure mode
+by name, not just implicitly via the identity-preservation rule.
+
+Verified live: generated two looks (a playful casual outfit and a formal
+evening suit) from the SAME neutral-expression reference photo. The
+results are genuinely different photographs — different pose, different
+hand placement, different setting/background, different head angle — not
+just different clothes on an identical stance, and both preserved the same
+face with no pasted-look seam.
 
 **Image quality is intentionally set to the high end of the cost/latency
 tradeoff.** All three call sites (`editViaResponsesApi`,
