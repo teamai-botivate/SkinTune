@@ -27,14 +27,11 @@ export type SkinTuneProfile = {
   bodyBuild: string;
   /** Single-select: Fitted / Regular / Relaxed / Oversized. */
   fit: string;
-  /** Single-select: Style First / Comfort First / Balance Both. */
-  priorities: string;
   style: string[];
   colorsLove: string[];
   colorsAvoid: string[];
   restrictions: string[];
   occasion: string;
-  occasionDetails: string;
   impression: string[];
   budget: string;
 };

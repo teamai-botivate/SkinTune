@@ -75,3 +75,30 @@ export const generateLookImages = async (
     recommendations.map((look) => generateOneLookImage(look, profileForRequest, context, photoUrl)),
   );
 };
+
+/**
+ * Re-generate a single already-generated look using the user's own
+ * follow-up correction (e.g. "make the sleeves longer"). Sends the look's
+ * current imageUrl AND the user's original uploaded photo as reference
+ * images to /api/refine-image, so the backend refines the existing result
+ * rather than starting over blind. Throws on failure — callers should show
+ * the error rather than silently keeping the old image, since a retry the
+ * user explicitly asked for that silently no-ops would be confusing.
+ */
+export const refineLookImage = async (
+  look: LookRecommendation,
+  profile: SkinTuneProfile,
+  context: OccasionContext,
+  customization: string,
+): Promise<LookRecommendation> => {
+  const { photoUrl, ...profileForRequest } = profile;
+  const res = await fetch('/api/refine-image', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ look, profile: profileForRequest, context, photoUrl: photoUrl || undefined, customization }),
+  });
+  if (!res.ok) throw new Error(`Image refinement request failed: ${res.status}`);
+  const data = (await res.json()) as { look: LookRecommendation };
+  if (!data.look) throw new Error('Empty image refinement response');
+  return data.look;
+};

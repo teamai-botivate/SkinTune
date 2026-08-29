@@ -47,6 +47,47 @@ type OccasionContext = { occasion: string; details: string };
  * this specific person's proportions (shoulder line, sleeve/hem length,
  * fabric fall), not merely worn.
  */
+/**
+ * Derives a per-look pose/expression/environment instruction instead of one
+ * fixed sentence shared by all 5 looks. Previously every look asked for the
+ * same "eye-level, chin level, confident expression" composition regardless
+ * of the look's own mood or the occasion, so all 5 results read as the same
+ * photo with different clothes rather than 5 distinct moments. This reads
+ * signal from the look's own title/note/reasoning/category (all already
+ * mood-differentiated by the recommendation engine — see recommendations.ts's
+ * "vary the 5 looks meaningfully" instruction) and the occasion, and picks a
+ * matching pose/expression/background family. Deterministic and always
+ * present (no AI call, no failure mode) — writeStylingAddendum() below can
+ * still add further photo-specific nuance on top of this per look.
+ */
+function buildPoseAndEnvironmentInstruction(look: LookRecommendation, occasion: string): string {
+  const moodText = `${look.category ?? ""} ${look.title} ${look.note} ${look.reasoning.join(" ")}`.toLowerCase();
+  const occasionLower = occasion.toLowerCase();
+
+  let pose: string;
+  if (/glamorous|bold|statement|party|festival/.test(moodText)) {
+    pose = "a poised, statement-making stance with a confident, slightly playful expression — shoulders angled a touch toward camera, chin level, radiating glamour and energy";
+  } else if (/minimal|soft|elegant|understated|quiet/.test(moodText)) {
+    pose = "a calm, elegant stance with a soft, composed expression — shoulders relaxed and level, chin gently lifted, understated poise rather than a big smile";
+  } else if (/casual|everyday|relaxed|comfort/.test(moodText) || occasionLower.includes("everyday") || occasionLower.includes("vacation")) {
+    pose = "a relaxed, candid-feeling stance with a natural, warm smile — shoulders easy and unposed, as if caught in a genuine happy moment, not stiffly staged";
+  } else if (/modern|alternative|creative|edgy/.test(moodText)) {
+    pose = "a confident, editorial stance with a direct, self-assured expression — a slight asymmetry to the shoulders or head tilt for a modern, magazine-cover energy";
+  } else if (occasionLower.includes("office") || occasionLower.includes("interview")) {
+    pose = "a composed, professional stance with a warm but grounded expression — shoulders squared, chin level, capable and approachable";
+  } else if (occasionLower.includes("wedding") || occasionLower.includes("special event")) {
+    pose = "a poised, celebratory stance with a warm genuine smile — shoulders relaxed and open, chin level, looking like a cherished moment worth remembering";
+  } else {
+    pose = "a natural, confident stance with a warm self-assured expression — shoulders relaxed and squared, chin level";
+  }
+
+  const environment = occasion
+    ? `Background/setting: somewhere genuinely fitting for "${occasion}" (e.g. a real venue or backdrop appropriate to that occasion, not a plain studio backdrop), softly out of focus behind the subject so they stay the clear focal point.`
+    : "Background/setting: a warm, softly out-of-focus real-world backdrop appropriate to an everyday moment, not a plain studio backdrop.";
+
+  return `Pose and expression for this specific look: ${pose}. Regardless of the angle or head position in the original photo, compose the new shot with the camera at the subject's eye level, waist-up editorial portrait framing — this is a flattering studio-style repose, not a copy of the original snapshot's angle. ${environment}`;
+}
+
 function buildFlatteringInstruction(pronouns: string): string {
   const normalized = pronouns.toLowerCase();
   if (normalized.includes("women")) {
@@ -66,7 +107,8 @@ function buildLookEditPrompt(
 ): string {
   const parts = [
     `This is a photo of a real specific person. Edit ONLY their clothing, hairstyle, makeup, and background — you must NOT change their face, facial structure, facial features, skin tone, or identity in any way. The exact same face from the input photo must appear in the output, just re-dressed.`,
-    `Re-dress and re-pose this exact person for a ${context.occasion || "everyday"} setting: waist-up editorial portrait. Regardless of the angle or head position in the original photo, compose the new shot with the camera held at the subject's eye level, their head facing forward toward the camera, chin level (not tilted down or to the side), shoulders relaxed and squared, and a natural confident expression — this is a flattering studio-style repose, not a copy of the original snapshot's angle.`,
+    `Re-dress this exact person for a ${context.occasion || "everyday"} setting.`,
+    buildPoseAndEnvironmentInstruction(look, context.occasion),
     buildFlatteringInstruction(profile.pronouns),
     `New outfit: ${look.outfit}`,
     `Colour direction: ${look.outfitColor}`,
@@ -105,16 +147,20 @@ function decodeDataUrl(dataUrl: string): { mime: string; buffer: Buffer } {
  * the blazer's shoulder seam close rather than structured/padded", or
  * "photo is a tight face crop, so the torso/build below the shoulders is
  * not visible — infer proportions conservatively from the visible frame").
+ * It's also asked for a pose/expression suggestion matching this specific
+ * look's mood, layered on top of buildPoseAndEnvironmentInstruction()'s
+ * deterministic per-look pose family — this agent sees the actual photo, so
+ * it can suggest something more specific than the mood-family default.
  *
  * Deliberately does NOT get to decide identity/pose/fit policy — this
  * agent only ever contributes ADDITIONAL styling detail. The mandatory
- * rules (keep the same face, re-pose to eye-level/confident, fit the
- * outfit to the person's actual build) are always injected by
- * buildLookEditPrompt() regardless of what this agent returns, so a
- * malformed or oddly-worded agent response can only add nuance, never
- * weaken or drop the non-negotiable constraints. If this call fails for
- * any reason, the caller falls back to the static template alone — the
- * mandatory rules still apply, just without the photo-specific detail.
+ * rules (keep the same face, re-pose to eye-level, fit the outfit to the
+ * person's actual build) are always injected by buildLookEditPrompt()
+ * regardless of what this agent returns, so a malformed or oddly-worded
+ * agent response can only add nuance, never weaken or drop the
+ * non-negotiable constraints. If this call fails for any reason, the
+ * caller falls back to the static template alone — the mandatory rules
+ * still apply, just without the photo-specific detail.
  */
 async function writeStylingAddendum(
   openai: ReturnType<typeof getOpenAIClient>,
@@ -130,14 +176,14 @@ async function writeStylingAddendum(
         {
           role: "system",
           content:
-            "You help write image-editing instructions for a fashion styling app. You are shown a real person's photo and a complete-look recommendation for them. Write 2-4 short, concrete sentences of ADDITIONAL styling detail an image-editing AI should follow when re-dressing this exact person in the given look — things you can only know from actually looking at the photo (their apparent proportions, shoulder width, framing, visible build, hair length/texture, etc.) that would help the outfit, hairstyle, and overall styling look correctly fitted and natural on THIS specific person. Do not repeat generic instructions like 'keep the same face' or 'fit their build' — those are handled separately. Do not invent a different outfit, colour, or accessory than the one described — only add detail about HOW to render what's already specified so it suits this person. Never comment on attractiveness, body flaws, or anything that could read as a judgment — this is purely practical styling/rendering guidance. Output only the sentences, no preamble, no markdown.",
+            "You help write image-editing instructions for a fashion styling app. You are shown a real person's photo and a complete-look recommendation for them. Write 2-5 short, concrete sentences of ADDITIONAL detail an image-editing AI should follow when re-dressing and re-posing this exact person in the given look. Cover two things: (1) fit/rendering detail you can only know from actually looking at the photo (apparent proportions, shoulder width, framing, visible build, hair length/texture) that would help the outfit and hairstyle look correctly fitted and natural on THIS specific person; (2) a pose, facial expression, and body language that genuinely matches the mood of THIS look and its occasion, distinct from a generic 'confident pose' — e.g. a relaxed candid laugh for a playful casual look, a poised composed stance for an elegant look, an energetic statement pose for a bold/glamorous look. Do not repeat generic instructions like 'keep the same face' — those are handled separately. Do not invent a different outfit, colour, or accessory than the one described — only add detail about HOW to render what's already specified so it suits this person and this moment. Never comment on attractiveness, body flaws, or anything that could read as a judgment — this is purely practical styling/rendering guidance. Output only the sentences, no preamble, no markdown.",
         },
         {
           role: "user",
           content: [
             {
               type: "text",
-              text: `Look to render on this person: outfit "${look.outfit}" (${look.outfitColor}), jewellery "${look.jewellery}", hairstyle "${look.hairstyle}", makeup "${look.makeup}", accessories "${look.accessories}". Occasion: ${context.occasion || "everyday"}. Person's stated build: ${profile.bodyBuild || "not specified"}, fit preference: ${profile.fit || "not specified"}. Write the styling addendum.`,
+              text: `Look to render on this person: "${look.title}" — ${look.note} Outfit "${look.outfit}" (${look.outfitColor}), jewellery "${look.jewellery}", hairstyle "${look.hairstyle}", makeup "${look.makeup}", accessories "${look.accessories}". Why this look was chosen: ${look.reasoning.join(" ")} Occasion: ${context.occasion || "everyday"}. Person's stated build: ${profile.bodyBuild || "not specified"}, fit preference: ${profile.fit || "not specified"}. Write the styling addendum, including a pose/expression suggestion distinct to this specific look's mood.`,
             },
             { type: "image_url", image_url: { url: photoUrl } },
           ],
@@ -190,9 +236,10 @@ async function editViaResponsesApi(
         type: "image_generation",
         model: IMAGE_MODEL,
         quality: "high",
+        moderation: "low",
         size: "1024x1536",
         output_format: "jpeg",
-        output_compression: 85,
+        output_compression: 90,
       },
     ],
   });
@@ -232,8 +279,9 @@ async function editViaImagesEdit(
     image: file,
     prompt,
     size: "1024x1536",
+    quality: "high",
     output_format: "jpeg",
-    output_compression: 80,
+    output_compression: 90,
     n: 1,
   });
   const image = result.data?.[0];
@@ -284,8 +332,10 @@ router.post("/generate-image", async (req, res) => {
         model: IMAGE_MODEL,
         prompt,
         size: "1024x1536",
+        quality: "high",
+        moderation: "low",
         output_format: "jpeg",
-        output_compression: 80,
+        output_compression: 90,
         n: 1,
       });
       const image = result.data?.[0];

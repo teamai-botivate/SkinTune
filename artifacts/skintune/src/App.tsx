@@ -5,17 +5,17 @@ import { Toaster } from '@/components/ui/toaster';
 import { ErrorBoundary } from '@/components/error-boundary';
 import {
   ArrowLeft, ArrowRight, Camera, Check, CheckCircle2, ChevronDown, ChevronRight,
-  CircleHelp, Clock3, FileText, Heart, Info, LockKeyhole, Pencil, RefreshCw,
-  RotateCcw, Save, ShieldCheck, Sparkles, Trash2, Upload, X, SlidersHorizontal,
+  CircleHelp, Clock3, Download, FileText, Heart, Info, LockKeyhole, Pencil, RefreshCw,
+  RotateCcw, Save, ShieldCheck, Sparkles, Trash2, Upload, Wand2, X, SlidersHorizontal,
 } from 'lucide-react';
 import { getLookRecommendations } from './services/recommendation-engine';
-import { generateLookImages } from './services/image-generation';
+import { generateLookImages, refineLookImage } from './services/image-generation';
 import { analyzePhoto } from './services/photo-analysis';
 import { photoAnalysisStages, photoDiagnostics } from './data/photo-diagnostics';
 import {
   ageGroupOptions, bodyBuildOptions, budgetOptions, colorAvoidOptions, colorLoveOptions,
   feedbackChangeOptions, feedbackFeelingOptions, fitOptions, homeOccasionShortcuts,
-  impressionOptions, lookCategoryBadges, occasionOptions, priorityOptions, pronounOptions,
+  impressionOptions, lookCategoryBadges, occasionOptions, pronounOptions,
   restrictionOptions, styleOptions, type SelectOption,
 } from './data/options';
 import type { LookRecommendation, PhotoStatus, SkinTuneProfile } from './types';
@@ -30,8 +30,8 @@ type Screen =
 const initialProfile: SkinTuneProfile = {
   name: '', pronouns: '', ageGroup: '', height: '', photoUrl: '', bodyBuild: '',
   appearance: { skinTone: '', undertone: '', confidence: 0, contrast: 'Medium' },
-  fit: '', priorities: '', style: [], colorsLove: [], colorsAvoid: [], restrictions: [],
-  occasion: '', occasionDetails: '', impression: [], budget: '',
+  fit: '', style: [], colorsLove: [], colorsAvoid: [], restrictions: [],
+  occasion: '', impression: [], budget: '',
 };
 
 // After the photo step, the remaining questions are grouped into three
@@ -512,9 +512,61 @@ function Results({ profile, looks: resultLooks, savedLooks, onSave, onLook, onFe
   </div></Shell>;
 }
 
-function LookDetail({ look, saved, onSave, onBack, onFeedback }: { look: LookRecommendation; saved: boolean; onSave: () => void; onBack: () => void; onFeedback: () => void }) {
+/** Triggers a browser download of a data-URL image (works for base64 data: URLs; a same-origin http(s) URL would need a fetch+blob step instead). */
+function downloadLookImage(imageUrl: string, title: string) {
+  const link = document.createElement('a');
+  link.href = imageUrl;
+  link.download = `skintune-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.jpg`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function LookDetail({ look, profile, saved, onSave, onBack, onFeedback, onRefined }: {
+  look: LookRecommendation; profile: SkinTuneProfile; saved: boolean;
+  onSave: () => void; onBack: () => void; onFeedback: () => void; onRefined: (look: LookRecommendation) => void;
+}) {
+  const [showRetry, setShowRetry] = useState(false);
+  const [customization, setCustomization] = useState('');
+  const [refining, setRefining] = useState(false);
+  const [refineError, setRefineError] = useState('');
+  const hasImage = hasRealImage(look.imageUrl);
+
+  const submitRetry = async () => {
+    if (!customization.trim()) return;
+    setRefining(true);
+    setRefineError('');
+    try {
+      const refined = await refineLookImage(look, profile, { occasion: profile.occasion, details: '' }, customization.trim());
+      onRefined(refined);
+      setShowRetry(false);
+      setCustomization('');
+    } catch (err) {
+      setRefineError('That retry didn’t go through. Please try again.');
+      console.warn('Refine failed:', err);
+    } finally {
+      setRefining(false);
+    }
+  };
+
   return <div className="noise min-h-[100dvh]"><Header onBack={onBack} onSettings={onBack} /><main className="mx-auto max-w-6xl px-4 py-8 sm:px-8 sm:py-14"><div className="grid gap-8 lg:grid-cols-[.9fr_1.1fr] lg:items-start">
-    <LookVisual look={look} large />
+    <div>
+      <LookVisual look={look} large />
+      {hasImage && <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" onClick={() => downloadLookImage(look.imageUrl, look.title)} data-testid="button-download-image" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-bold hover:border-primary/50"><Download size={15} /> Download image</button>
+        <button type="button" onClick={() => setShowRetry((v) => !v)} data-testid="button-retry-look" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-bold hover:border-primary/50"><Wand2 size={15} /> Retry with changes</button>
+      </div>}
+      {showRetry && <div className="mt-4 animate-rise rounded-2xl border border-primary/25 bg-primary/5 p-5" data-testid="panel-retry-customization">
+        <p className="text-sm font-bold">What should we change about this image?</p>
+        <p className="mt-1 text-xs text-muted-foreground">We'll keep the same look and the same you, just apply this correction — e.g. "make the sleeves longer" or "different shoe colour".</p>
+        <textarea value={customization} onChange={(e) => setCustomization(e.target.value)} data-testid="textarea-retry-customization" rows={3} placeholder="Make the sleeves longer, and a lighter shade of the same colour." className="focus-ring mt-3 w-full resize-none rounded-2xl border border-border bg-card p-4 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/55" />
+        {refineError && <p className="mt-2 text-xs font-semibold text-destructive">{refineError}</p>}
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button type="button" onClick={submitRetry} disabled={!customization.trim() || refining} data-testid="button-submit-retry" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50">{refining ? <RefreshCw size={15} className="animate-spin" /> : <Wand2 size={15} />} {refining ? 'Regenerating…' : 'Regenerate this look'}</button>
+          <button type="button" onClick={() => { setShowRetry(false); setCustomization(''); setRefineError(''); }} disabled={refining} data-testid="button-cancel-retry" className="focus-ring rounded-full px-4 py-2.5 text-sm font-bold text-muted-foreground hover:bg-secondary">Cancel</button>
+        </div>
+      </div>}
+    </div>
     <div className="animate-rise lg:pt-4">
       <p className="text-xs font-bold uppercase tracking-[.18em] text-primary">The complete look</p>
       <h1 className="mt-4 font-serif text-[clamp(3rem,7vw,6rem)] leading-[.86] tracking-[-.05em]">{look.title}</h1>
@@ -592,7 +644,7 @@ function SkinTune() {
     if (screen !== 'generating') return;
     let active = true;
     getLookRecommendations(profile)
-      .then((recommendations) => generateLookImages(recommendations, profile, { occasion: profile.occasion, details: profile.occasionDetails }))
+      .then((recommendations) => generateLookImages(recommendations, profile, { occasion: profile.occasion, details: '' }))
       .then((result) => { if (active) { setGeneratedLooks(result); go('results'); } });
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: generation begins once per entry into this screen
@@ -607,7 +659,7 @@ function SkinTune() {
   if (screen === 'settings') return <Settings profile={profile} deletedNotice={deletedNotice} onBack={() => go(profile.name ? 'home' : 'welcome')} onDelete={() => { localStorage.removeItem('skintune-profile'); localStorage.removeItem('skintune-saved-looks'); localStorage.removeItem('skintune-feedback'); setProfile(initialProfile); setDeletedNotice(true); setTimeout(() => go('welcome'), 900); }} />;
   if (screen === 'photo') return <PhotoPanel profile={profile} update={update} onContinue={() => go('appearance')} onBack={back} />;
   if (screen === 'results') return <Results profile={profile} looks={generatedLooks} savedLooks={savedLooks} onSave={(id) => setSavedLooks((old) => old.includes(id) ? old.filter((item) => item !== id) : [...old, id])} onLook={(id) => { setDetailId(id); go('detail'); }} onFeedback={() => go('feedback')} onBack={() => go('home')} />;
-  if (screen === 'detail' && currentLook) return <LookDetail look={currentLook} saved={savedLooks.includes(currentLook.id)} onSave={() => setSavedLooks((old) => old.includes(currentLook.id) ? old.filter((item) => item !== currentLook.id) : [...old, currentLook.id])} onBack={back} onFeedback={() => go('feedback')} />;
+  if (screen === 'detail' && currentLook) return <LookDetail look={currentLook} profile={profile} saved={savedLooks.includes(currentLook.id)} onSave={() => setSavedLooks((old) => old.includes(currentLook.id) ? old.filter((item) => item !== currentLook.id) : [...old, currentLook.id])} onBack={back} onFeedback={() => go('feedback')} onRefined={(refined) => setGeneratedLooks((old) => old.map((item) => item.id === refined.id ? refined : item))} />;
   if (screen === 'feedback') return <Feedback feeling={feeling} setFeeling={setFeeling} changeAreas={changeAreas} toggleChangeArea={toggleChangeArea} request={changeRequest} setRequest={setChangeRequest} onBack={back} onDone={() => {
     localStorage.setItem('skintune-feedback', JSON.stringify({ feeling, changeAreas, changeRequest }));
     if (feeling === 'Not my style') { setFeeling(''); setChangeAreas([]); setChangeRequest(''); go('generating'); } else { go('results'); }
@@ -625,7 +677,6 @@ function SkinTune() {
       fields={[
         { kind: 'single', field: 'bodyBuild', label: 'How would you describe your build?', options: bodyBuildOptions },
         { kind: 'single', field: 'fit', label: 'What fit feels like you?', options: fitOptions },
-        { kind: 'single', field: 'priorities', label: 'What matters most right now?', options: priorityOptions },
         { kind: 'multi', field: 'style', label: 'Which style worlds pull you in?', hint: 'Choose as many as you like.', options: styleOptions },
       ]}
       onNext={() => go('colors-occasion')} onBack={back} />,
@@ -635,7 +686,6 @@ function SkinTune() {
         { kind: 'multi', field: 'colorsAvoid', label: 'Anything you tend to avoid?', options: colorAvoidOptions, required: false },
         { kind: 'multi', field: 'restrictions', label: 'Anything we should work around?', options: restrictionOptions, required: false },
         { kind: 'single', field: 'occasion', label: 'Where are you getting dressed for?', options: occasionOptions },
-        { kind: 'text', field: 'occasionDetails', label: 'Any details worth knowing?', placeholder: 'It’s a late-spring dinner at a small restaurant. I want to look considered but not overdressed.' },
       ]}
       onNext={() => go('final-prefs')} onBack={back} />,
     'final-prefs': <SectionStep profile={profile} update={update} step={10} eyebrow="10 / the finishing touch" title="How you want to come across, and your budget." body="Last section — then we'll make your five looks."
@@ -654,7 +704,7 @@ function Review({ profile, onEdit, onSave, onBack }: { profile: SkinTuneProfile;
   const rows: { label: string; value: string; target: Screen }[] = [
     { label: 'Appearance', value: `${profile.appearance.skinTone} · ${profile.appearance.undertone} undertone · ${profile.appearance.confidence}% confidence`, target: 'appearance' },
     { label: 'Profile', value: `${profile.pronouns} · ${profile.ageGroup}`, target: 'profile' },
-    { label: 'Build, fit & style', value: `${profile.bodyBuild} · ${profile.fit}${profile.priorities ? ` · ${profile.priorities}` : ''}${profile.style.length ? ` · ${profile.style.join(', ')}` : ''}`, target: 'body-style' },
+    { label: 'Build, fit & style', value: `${profile.bodyBuild} · ${profile.fit}${profile.style.length ? ` · ${profile.style.join(', ')}` : ''}`, target: 'body-style' },
     { label: 'Colours & moment', value: `Loves ${profile.colorsLove.join(', ')}${profile.colorsAvoid.length ? ` · avoids ${profile.colorsAvoid.join(', ')}` : ''} · ${profile.occasion}`, target: 'colors-occasion' },
     { label: 'Impression & budget', value: `${profile.impression.join(', ')} · ${profile.budget}`, target: 'final-prefs' },
   ];

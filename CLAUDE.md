@@ -56,17 +56,30 @@ The **real product code** lives entirely in `artifacts/skintune/src/`. Read
   user could answer them. One Continue button per section, gated on that
   section's required fields.
 - **After the photo step, questions are grouped into 3 section screens, not
-  11 individual ones.** `body-style` (build, fit, priorities, style),
-  `colors-occasion` (colours loved/avoided, restrictions, occasion,
-  occasion details), `final-prefs` (impression, budget) — each is one
-  `SectionStep` call with a `fields` array, not separate `Screen` entries.
-  This exists specifically to cut onboarding time after photo upload; if a
-  new field belongs conceptually with one of these three groups, add it to
-  that section's `fields` array rather than creating a new standalone
-  screen. `SectionField`'s `kind: 'single' | 'multi' | 'text'` covers
-  everything currently needed (a plain textarea uses `'text'`); required
-  defaults to `true` — pass `required: false` for optional fields (e.g.
-  colours to avoid, restrictions).
+  11 individual ones.** `body-style` (build, fit, style), `colors-occasion`
+  (colours loved/avoided, restrictions, occasion), `final-prefs`
+  (impression, budget) — each is one `SectionStep` call with a `fields`
+  array, not separate `Screen` entries. This exists specifically to cut
+  onboarding time after photo upload; if a new field belongs conceptually
+  with one of these three groups, add it to that section's `fields` array
+  rather than creating a new standalone screen. `SectionField`'s
+  `kind: 'single' | 'multi' | 'text'` covers everything currently needed (a
+  plain textarea uses `'text'`); required defaults to `true` — pass
+  `required: false` for optional fields (e.g. colours to avoid,
+  restrictions).
+- **`priorities` (Style First/Comfort First/Balance Both) and
+  `occasionDetails` (free-text notes) were removed from `SkinTuneProfile`
+  entirely** — not just made optional — to cut required onboarding taps
+  further per explicit product direction ("kam se kam fill karna pare and
+  sb kuch ussi me Agent samjh jaaye"). The recommendation engine now infers
+  a sensible style/comfort balance from the user's `style` and `impression`
+  choices, and infers reasonable occasion context from the `occasion` word
+  alone — see `buildUserPrompt`'s "infer" instruction in
+  `artifacts/api-server/src/routes/recommendations.ts`. Do not re-add
+  either field without also removing that inference instruction, or the
+  model will get conflicting signals. Name, age, gender/pronouns, height,
+  and budget were explicitly confirmed as NOT candidates for this kind of
+  cut — they stay required, real questions.
 - **Photo analysis** (`PhotoPanel` in `App.tsx`) shows staged "Analyzing…"
   copy (`src/data/photo-diagnostics.ts`), then either a good-photo appearance
   read or a specific, explainable problem (Problem / Why it matters / How to
@@ -218,9 +231,10 @@ generic template.
 **Prompt-writing agent** (`writeStylingAddendum` in `generate-image.ts`) —
 before building the final edit prompt, a GPT-4o vision call looks at the
 user's actual uploaded photo plus their full profile and the look's
-styling data, and writes 2-4 sentences of additional photo-specific
-styling detail (e.g. actual apparent shoulder width, framing, build) that
-a static text template can't know without seeing the photo. This is
+styling data, and writes 2-5 sentences of additional photo-specific
+styling AND pose/expression detail (e.g. actual apparent shoulder width,
+framing, build, plus a pose suggestion matching this look's specific mood)
+that a static text template can't know without seeing the photo. This is
 strictly additive: the mandatory rules (identity preservation, pose
 recomposition, fit-to-build) are always injected by `buildLookEditPrompt`
 regardless of what this agent returns, so it can only add nuance, never
@@ -233,6 +247,36 @@ wrote for a given request. Verified live: with a slim-build reference photo
 styled in a fitted evening dress, the addendum-assisted result correctly
 fit the actual narrow shoulder line and body proportions, not a generic
 template.
+
+**Pose, expression, and background vary per look — this was a real
+production bug.** Previously every one of the 5 looks got the exact same
+fixed pose/expression sentence ("eye-level, chin level, confident
+expression"), so all 5 results read as the same photo with different
+clothes rather than 5 distinct moments. `buildPoseAndEnvironmentInstruction`
+in `generate-image.ts` now derives a pose/expression/background family
+deterministically from each look's own `category`/`title`/`note`/`reasoning`
+text and the occasion (e.g. candid relaxed smile for casual/everyday,
+poised composed stance for minimal/elegant, statement energy for
+glamorous/bold, professional-warm for office/interview) — no AI call, no
+failure mode, always present. `writeStylingAddendum` can layer a more
+specific pose suggestion on top since it sees the actual photo. Verified
+live: a casual "Everyday" look generated a genuinely candid, relaxed-smile,
+café-backdrop result, visibly different in energy from the earlier
+formal/office test photos.
+
+**Image quality is intentionally set to the high end of the cost/latency
+tradeoff.** All three call sites (`editViaResponsesApi`,
+`editViaImagesEdit`, and the no-photo `images.generate` fallback) use
+`quality: "high"` and `moderation: "low"` (the latter to reduce
+false-positive content blocks on legitimate photos/outfits;
+`images.edit` does not support `moderation`, only the other two paths do —
+confirmed via TypeScript, not just docs). This is a deliberate choice, not
+an oversight: `quality: "high"` measured at ~95-105s per image in testing
+(vs ~30-45s at default), a real latency cost, but was chosen explicitly
+over speed per product direction ("best quality of images"). If latency
+ever becomes a blocking complaint, the fix is dropping to `quality:
+"medium"` on these three call sites, not re-adding batching or cutting
+other corners.
 
 **Do not re-batch this into a single multi-look request.** A single
 generated image (even JPEG-compressed) can run a few hundred KB to low
@@ -260,13 +304,40 @@ uploaded photo and judge whether it's usable, and if so, estimate skin
 tone/undertone/contrast/confidence. Falls back to a mock "good" result if
 the call fails, same pattern as the other services.
 
-**Two of the three AI routes now legitimately receive the raw photo:**
-`/api/analyze-photo` (to read it) and `/api/generate-image` (to edit it —
-see `image-generation.ts` above). Only `/api/recommendations` still strips
-it (it only ever needs `appearance.skinTone`/`undertone`, already derived
-by the analysis step). Don't assume "the photo never leaves the browser" as
-a blanket rule when touching these routes — check which one you're actually
-changing.
+**Three of the four AI routes now legitimately receive the raw photo:**
+`/api/analyze-photo` (to read it), `/api/generate-image` (to edit it — see
+`image-generation.ts` above), and `/api/refine-image` (see below). Only
+`/api/recommendations` still strips it (it only ever needs
+`appearance.skinTone`/`undertone`, already derived by the analysis step).
+Don't assume "the photo never leaves the browser" as a blanket rule when
+touching these routes — check which one you're actually changing.
+
+### `src/services/image-generation.ts`'s `refineLookImage` — retry with customization
+
+Per-look "Retry with changes" on the `LookDetail` screen: the user types a
+free-text correction (e.g. "make the sleeves longer", "different shoe
+colour") and `refineLookImage` calls `POST /api/refine-image`
+(`artifacts/api-server/src/routes/refine-image.ts`), which sends BOTH the
+user's original uploaded photo AND the already-generated look image as
+reference images to the Responses API's `image_generation` tool, alongside
+the correction text — a targeted refinement of the existing result, not a
+fresh generation from the original photo. Same primary/fallback pattern as
+`generate-image.ts` (`refineViaResponsesApi` tries first, falls back to
+`refineViaImagesEdit` with the images passed as an array — `images.edit`
+supports up to 16 reference images — on any failure, including the same
+org-verification 403). One request per look, same reasoning as
+`/api/generate-image`. Verified live: refining a generated casual look with
+"change the tote to black and swap the shirt for a denim jacket" produced
+exactly that change while keeping the face, pose, background, and every
+other garment identical to the original generation — a precise edit, not a
+regeneration.
+
+**Download** — `LookDetail` also has a plain "Download image" button
+(`downloadLookImage` in `App.tsx`) that triggers a browser download of the
+current `imageUrl` via a synthetic `<a download>` click. Works because
+`imageUrl` is a `data:` URL (base64), not a same-origin fetch — if a future
+change ever serves images from a real URL instead, this would need a
+fetch+blob step first.
 
 **Photo-quality gating is deliberately lenient.** The system prompt in
 `analyze-photo.ts` was originally too strict — it kept flagging ordinary

@@ -39,11 +39,11 @@ export const fitOptions: SelectOption[] = [
   { label: 'Oversized', icon: '🔥', description: 'Bold volume, statement proportion.' },
 ];
 
-export const priorityOptions: SelectOption[] = [
-  { label: 'Style First', icon: '👗', description: 'Prioritize the strongest visual impact.' },
-  { label: 'Comfort First', icon: '😌', description: 'Prioritize ease and wearability.' },
-  { label: 'Balance Both', icon: '⚖️', description: 'An even mix of style and comfort.' },
-];
+// Note: "priorities" (Style First / Comfort First / Balance Both) is no
+// longer a separate onboarding question — the recommendation engine infers
+// this balance from the user's style and impression choices instead, to
+// keep the required form shorter. See artifacts/api-server/src/routes/
+// recommendations.ts's buildUserPrompt().
 
 export const styleOptions: SelectOption[] = [
   { label: 'Elegant' },

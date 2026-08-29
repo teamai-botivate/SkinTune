@@ -23,17 +23,14 @@ export const SkinTuneProfileSchema = z.object({
     contrast: z.string(),
   }),
   bodyBuild: z.string(),
-  // Single-select fields (Fitted/Regular/Relaxed/Oversized;
-  // Style First/Comfort First/Balance Both) — must stay in sync with
-  // artifacts/skintune/src/types.ts's SkinTuneProfile.
+  // Single-select field (Fitted/Regular/Relaxed/Oversized) — must stay in
+  // sync with artifacts/skintune/src/types.ts's SkinTuneProfile.
   fit: z.string(),
-  priorities: z.string(),
   style: z.array(z.string()),
   colorsLove: z.array(z.string()),
   colorsAvoid: z.array(z.string()),
   restrictions: z.array(z.string()),
   occasion: z.string(),
-  occasionDetails: z.string(),
   impression: z.array(z.string()),
   budget: z.string(),
 });
@@ -105,6 +102,27 @@ export const GenerateImageRequestSchema = z.object({
 });
 
 export const GenerateImageResponseSchema = z.object({
+  look: LookRecommendationSchema,
+});
+
+// ---- /api/refine-image (per-look retry with a user customization note) ----
+//
+// Takes the look that was already generated (with its real imageUrl) plus
+// the user's original uploaded photo, and re-edits using BOTH as reference
+// images alongside a free-text correction from the user (e.g. "make the
+// sleeves longer", "different shoe colour") — a refinement of the existing
+// result, not a fresh generation from scratch. Same one-look-per-call
+// reasoning as /api/generate-image applies here.
+
+export const RefineImageRequestSchema = z.object({
+  look: LookRecommendationSchema, // look.imageUrl here is the ALREADY-GENERATED image to refine
+  profile: SkinTuneProfileSchema,
+  context: OccasionContextSchema,
+  photoUrl: z.string().optional(), // the user's original uploaded photo, for identity reference
+  customization: z.string().min(1).max(500),
+});
+
+export const RefineImageResponseSchema = z.object({
   look: LookRecommendationSchema,
 });
 

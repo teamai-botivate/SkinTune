@@ -18,6 +18,7 @@ Guidelines:
 - Each look must be a genuinely complete outfit: outfit, colour direction, jewellery, hairstyle, makeup, footwear, and accessories.
 - Vary the 5 looks meaningfully: one should be the closest overall match, then vary by mood (e.g. more glamorous, more elegant/soft, more minimal, a bolder/modern alternative) so the set feels like a real wardrobe of options, not five near-duplicates.
 - Respect the user's stated colour preferences and restrictions; never contradict a stated dislike.
+- The user was NOT asked to separately state a style-vs-comfort priority or occasion notes beyond a single occasion word — infer a sensible balance of style and comfort yourself from their style-world choices, desired impression, and occasion (e.g. glamorous/luxury style choices or a formal occasion lean toward style-first; casual/minimal choices or an everyday occasion lean toward comfort-first), and infer reasonable context for the occasion from the occasion word alone (e.g. "Wedding" implies a celebratory, semi-formal to formal setting) without needing it spelled out.
 - reasoning must be 3-5 short, concrete, supportive bullet points explaining why THIS look suits THIS person's profile (appearance, body/fit, occasion, impression). Never use words like "flaws", "hide your body", "make you fairer", "dull", "unsuitable body", or "imperfections" — this product is about confidence and expression, never judgement or diagnosis.
 - confidence is an integer 0-100 reflecting how well the look matches the stated profile.
 - palette is an array of 3 hex color strings representing the look's dominant colours.
@@ -30,12 +31,11 @@ function buildUserPrompt(profile: SkinTuneProfile): string {
 - Appearance: skin tone ${profile.appearance.skinTone || "unspecified"}, ${profile.appearance.undertone || "unspecified"} undertone, contrast ${profile.appearance.contrast || "unspecified"}
 - Body build: ${profile.bodyBuild || "not specified"}
 - Fit preference: ${profile.fit || "no strong preference"}
-- Priorities: ${profile.priorities || "not specified"}
 - Style worlds: ${profile.style.join(", ") || "open to suggestion"}
 - Colours loved: ${profile.colorsLove.join(", ") || "no strong favourites stated"}
 - Colours to avoid: ${profile.colorsAvoid.join(", ") || "none stated"}
 - Restrictions: ${profile.restrictions.join(", ") || "none stated"}
-- Occasion: ${profile.occasion || "not specified"} — ${profile.occasionDetails || "no further detail given"}
+- Occasion: ${profile.occasion || "not specified"}
 - Desired impression: ${profile.impression.join(", ") || "not specified"}
 - Budget: ${profile.budget || "not specified"}
 
