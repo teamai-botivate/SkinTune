@@ -88,6 +88,16 @@ The **real product code** lives entirely in `artifacts/skintune/src/`. Read
 - **Recommendation engine vs. image generation are separate services** — see
   below. UI components only ever call these two functions; they never talk
   to a specific model/provider directly.
+- **`Generating` (`App.tsx`) cycles through stages on repeat, it doesn't run
+  once and stop.** Real generation (5 images at `quality: "high"` — see
+  below) takes ~90-100s+ total, but the original version's 4 stages
+  finished advancing in ~2.5s and then sat frozen on the last one for the
+  rest of the wait, reading as stuck rather than working. It now loops
+  through a longer stage list indefinitely, shows a live elapsed-time
+  counter instead of a static "usually takes less than a minute" (which was
+  no longer true once quality was bumped to high), and has a continuously
+  animated spinner + indeterminate progress bar so the screen visibly stays
+  alive for the whole real wait, however long that turns out to be.
 
 ### Theme (`src/index.css`)
 
@@ -289,6 +299,46 @@ results are genuinely different photographs — different pose, different
 hand placement, different setting/background, different head angle — not
 just different clothes on an identical stance, and both preserved the same
 face with no pasted-look seam.
+
+**Round 2 of this same bug: even with the agent rewrite above, real 5-look
+batches from the recommendation engine still produced repetitive
+expressions in production.** Root cause, found by pulling a real
+`/api/recommendations` response and inspecting it: the 5 looks' actual
+`category`/`note`/`reasoning` text was too similar to give the pose agent
+anything genuinely distinct to react to (a real response had categories
+`Elegant, Modern, Elegant, Minimalist, Bold` — two of five literally
+identical — and thin generic `note` values like `"Major match"` /
+`"Modern interpretation"`). The pose agent was doing exactly what it was
+told (read the look's mood from its text), but the upstream text wasn't
+mood-differentiated enough to read from.
+
+Fix: added two new required fields to `LookRecommendationSchema` —
+`vibe` (a single mood word, must be 5 different words across the 5 looks,
+explicitly forbidden from defaulting to the same
+Elegant/Modern/Minimal/Bold/Glamorous rotation every time) and
+`personaEnergy` (1-2 vivid, photographer-actionable sentences of how this
+person would move/stand/feel in this specific look). `recommendations.ts`'s
+system prompt now explicitly states these two fields exist specifically to
+drive per-look pose generation, and that near-duplicate energy across
+looks produces near-duplicate photos — naming the downstream consequence,
+not just asking for "distinct" abstractly. `writeStylingAddendum` in
+`generate-image.ts` now receives `look.vibe`/`look.personaEnergy` as
+direct input and is told to honor that brief but translate it onto the
+actual face in the photo, not just restate it. Both are `.optional()` in
+the schema so older cached/mock looks without them still validate; the
+mock static looks in `recommendation-engine.ts` were also given real
+`vibe`/`personaEnergy` values for consistency when the AI call fails and
+that fallback is used.
+
+Verified live: pulled a real `/api/recommendations` response after this
+fix — 5 genuinely distinct vibes (`Sophisticated, Chic, Dreamy, Playful,
+Serene`) with 5 clearly distinguishable `personaEnergy` descriptions
+(different movement, different mood, different expression per look),
+compared directly against the earlier repetitive-category response from
+the same test payload. If expressions are ever reported as repetitive
+again, check the actual `vibe`/`personaEnergy` values in a real
+`/api/recommendations` response FIRST — this has now been the root cause
+twice, both times upstream of the image-generation code itself.
 
 **Image quality is intentionally set to the high end of the cost/latency
 tradeoff.** All three call sites (`editViaResponsesApi`,

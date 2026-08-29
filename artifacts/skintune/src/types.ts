@@ -55,6 +55,10 @@ export type LookRecommendation = {
   title: string;
   note: string;
   category?: string;
+  /** A single distinct mood word (e.g. "Radiant", "Grounded") used to drive per-look pose/expression in image generation. */
+  vibe?: string;
+  /** 1-2 sentences of photographer-facing pose/energy direction for this specific look. */
+  personaEnergy?: string;
   palette: string[];
   pieces: LookPiece[];
   outfit: string;

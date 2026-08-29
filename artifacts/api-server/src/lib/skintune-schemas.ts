@@ -47,6 +47,16 @@ export const LookRecommendationSchema = z.object({
   title: z.string(),
   note: z.string(),
   category: z.string().optional(),
+  // A single distinct mood word for this look (e.g. "Radiant", "Grounded",
+  // "Playful") — used downstream by the image-generation pose agent (see
+  // artifacts/api-server/src/routes/generate-image.ts) to pick a genuinely
+  // different pose/expression per look. Optional so older cached looks
+  // (before this field existed) still validate.
+  vibe: z.string().optional(),
+  // 1-2 vivid sentences describing how this person would actually move,
+  // stand, and feel in this specific look — concrete photographer-facing
+  // direction, not just a mood label. Also feeds the pose agent.
+  personaEnergy: z.string().optional(),
   palette: z.array(z.string()),
   pieces: z.array(LookPieceSchema),
   outfit: z.string(),

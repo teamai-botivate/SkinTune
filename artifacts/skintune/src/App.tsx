@@ -463,11 +463,51 @@ function LookVisual({ look, large = false }: { look: LookRecommendation; large?:
   </div>;
 }
 
+// Stages the "Generating" screen cycles through. Real generation (5 images,
+// each ~30s-100s depending on image-model quality settings) takes far
+// longer than these stages alone would suggest, so this deliberately keeps
+// cycling/animating for as long as the screen is mounted rather than
+// finishing early and sitting static — see the interval logic below.
+const generatingStages = [
+  'Reading the room',
+  'Balancing your palette',
+  'Building complete outfits',
+  'Styling every detail',
+  'Fitting each piece to you',
+  'Rendering your look',
+  'Adding the finishing touches',
+];
+
 function Generating() {
-  const stages = ['Reading the room', 'Balancing your palette', 'Building complete outfits', 'Adding the details that make them yours'];
   const [active, setActive] = useState(0);
-  useEffect(() => { const timer = window.setInterval(() => setActive((value) => Math.min(value + 1, 3)), 640); return () => window.clearInterval(timer); }, []);
-  return <div className="noise min-h-[100dvh] bg-background text-foreground"><div className="mx-auto flex min-h-[100dvh] max-w-3xl flex-col justify-center px-6 py-16"><div className="mb-14 flex items-center gap-2"><span className="grid size-10 place-items-center rounded-[14px] bg-primary text-primary-foreground"><Sparkles size={19} /></span><span className="font-serif text-2xl">SkinTune</span></div><p className="text-xs font-bold uppercase tracking-[.24em] text-primary">Your personal edit</p><h1 className="mt-5 max-w-xl font-serif text-[clamp(3rem,8vw,6.5rem)] leading-[.88] tracking-[-.05em]">Making room<br />for your <em className="text-primary">point of view.</em></h1><div className="mt-16 max-w-md space-y-4">{stages.map((stage, index) => <div key={stage} className={`flex items-center gap-4 transition duration-500 ${index <= active ? 'opacity-100' : 'opacity-30'}`}><span className={`grid size-8 place-items-center rounded-full border ${index < active ? 'border-primary bg-primary text-primary-foreground' : 'border-foreground/25'}`}>{index < active ? <Check size={15} /> : index === active ? <span className="size-2 animate-pulse rounded-full bg-primary" /> : <span className="size-1.5 rounded-full bg-foreground/40" />}</span><span className="text-sm font-semibold">{stage}</span></div>)}</div><p className="mt-12 flex items-center gap-2 text-xs text-muted-foreground"><Clock3 size={14} /> Usually takes less than a minute</p></div></div>;
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  useEffect(() => {
+    // Cycles through the stage list on repeat (not once-and-stop) so the
+    // screen stays visibly active for the full real generation time —
+    // previously the 4 stages finished in ~2.5s and then sat frozen on the
+    // last one for the remaining ~90s+ of actual work, which read as stuck.
+    const stageTimer = window.setInterval(() => setActive((value) => (value + 1) % generatingStages.length), 2600);
+    const clockTimer = window.setInterval(() => setElapsedSeconds((value) => value + 1), 1000);
+    return () => { window.clearInterval(stageTimer); window.clearInterval(clockTimer); };
+  }, []);
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = elapsedSeconds % 60;
+  return <div className="noise min-h-[100dvh] bg-background text-foreground"><div className="mx-auto flex min-h-[100dvh] max-w-3xl flex-col justify-center px-6 py-16">
+    <div className="mb-14 flex items-center gap-2"><span className="grid size-10 place-items-center rounded-[14px] bg-primary text-primary-foreground"><Sparkles size={19} className="animate-pulse" /></span><span className="font-serif text-2xl">SkinTune</span></div>
+    <p className="text-xs font-bold uppercase tracking-[.24em] text-primary">Your personal edit</p>
+    <h1 className="mt-5 max-w-xl font-serif text-[clamp(3rem,8vw,6.5rem)] leading-[.88] tracking-[-.05em]">Making room<br />for your <em className="text-primary">point of view.</em></h1>
+    <div className="mt-16 flex max-w-md items-center gap-4" data-testid="text-generating-stage">
+      <span className="relative grid size-9 shrink-0 place-items-center">
+        <span className="absolute inset-0 animate-ping rounded-full bg-primary/40" />
+        <span className="relative grid size-9 place-items-center rounded-full bg-primary text-primary-foreground"><RefreshCw size={16} className="animate-spin" /></span>
+      </span>
+      <span key={active} className="animate-rise text-lg font-semibold">{generatingStages[active]}…</span>
+    </div>
+    <div className="mt-6 h-1.5 max-w-md overflow-hidden rounded-full bg-secondary">
+      <div className="h-full w-1/3 animate-[indeterminate_1.6s_ease-in-out_infinite] rounded-full bg-primary" />
+    </div>
+    <p className="mt-8 flex items-center gap-2 text-xs text-muted-foreground"><Clock3 size={14} /> {elapsedSeconds < 5 ? 'Getting started…' : `${minutes > 0 ? `${minutes}m ` : ''}${seconds}s so far — five complete looks take real, careful work.`}</p>
+  </div></div>;
 }
 
 function Home({ profile, savedLooks, generatedLooks, onNew, onResults, onSettings, onLook, onQuickStart }: {

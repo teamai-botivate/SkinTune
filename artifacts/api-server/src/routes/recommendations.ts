@@ -16,7 +16,8 @@ const SYSTEM_PROMPT = `You are SkinTune's styling engine. Given a user's appeara
 
 Guidelines:
 - Each look must be a genuinely complete outfit: outfit, colour direction, jewellery, hairstyle, makeup, footwear, and accessories.
-- Vary the 5 looks meaningfully: one should be the closest overall match, then vary by mood (e.g. more glamorous, more elegant/soft, more minimal, a bolder/modern alternative) so the set feels like a real wardrobe of options, not five near-duplicates.
+- Vary the 5 looks meaningfully — not just different outfit details, but a genuinely different PERSONALITY AND ENERGY per look, because a downstream photo-generation step uses your "vibe" and "personaEnergy" fields to decide how the person should be posed and photographed for each look, and near-duplicate energy across looks produces near-duplicate photos. The 5 "vibe" values must be 5 DIFFERENT single words, no repeats, chosen freely to fit this person and occasion (do not just reuse "Elegant"/"Modern"/"Minimal"/"Bold"/"Glamorous" every time — pick whatever 5 distinct words genuinely fit, e.g. "Radiant", "Grounded", "Playful", "Regal", "Effortless", "Daring", "Serene", "Magnetic" — vary them per request). "personaEnergy" must be 1-2 vivid sentences describing how this person would actually move, stand, and feel in this specific look — concrete enough that a photographer could act on it (e.g. "Warm and unhurried — the kind of confidence that doesn't need to perform, a soft knowing smile" vs. "Sharp and electric — chin up, a look that says she owns the room the second she walks in"). Make these 5 personaEnergy descriptions clearly distinguishable from each other; do not let two looks read as the same energy in different words.
+- One look should be the closest overall match to their stated preferences; the other 4 should meaningfully diverge from it and from each other in vibe/energy, not just in colour or garment type.
 - Respect the user's stated colour preferences and restrictions; never contradict a stated dislike.
 - The user was NOT asked to separately state a style-vs-comfort priority or occasion notes beyond a single occasion word — infer a sensible balance of style and comfort yourself from their style-world choices, desired impression, and occasion (e.g. glamorous/luxury style choices or a formal occasion lean toward style-first; casual/minimal choices or an everyday occasion lean toward comfort-first), and infer reasonable context for the occasion from the occasion word alone (e.g. "Wedding" implies a celebratory, semi-formal to formal setting) without needing it spelled out.
 - reasoning must be 3-5 short, concrete, supportive bullet points explaining why THIS look suits THIS person's profile (appearance, body/fit, occasion, impression). Never use words like "flaws", "hide your body", "make you fairer", "dull", "unsuitable body", or "imperfections" — this product is about confidence and expression, never judgement or diagnosis.
@@ -69,6 +70,12 @@ const LOOK_JSON_SCHEMA = {
     title: { type: "string" },
     note: { type: "string" },
     category: { type: "string" },
+    // See skintune-schemas.ts's LookRecommendationSchema doc comments —
+    // these two feed the downstream image-generation pose agent so each of
+    // the 5 looks gets a genuinely different pose/expression, not just a
+    // different outfit on the same expression.
+    vibe: { type: "string" },
+    personaEnergy: { type: "string" },
     palette: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 3 },
     pieces: { type: "array", items: LOOK_PIECE_JSON_SCHEMA, minItems: 3, maxItems: 5 },
     outfit: { type: "string" },
@@ -82,8 +89,8 @@ const LOOK_JSON_SCHEMA = {
     confidence: { type: "integer" },
   },
   required: [
-    "id", "title", "note", "category", "palette", "pieces", "outfit", "outfitColor",
-    "jewellery", "hairstyle", "makeup", "accessories", "footwear", "reasoning", "confidence",
+    "id", "title", "note", "category", "vibe", "personaEnergy", "palette", "pieces", "outfit",
+    "outfitColor", "jewellery", "hairstyle", "makeup", "accessories", "footwear", "reasoning", "confidence",
   ],
   additionalProperties: false,
 } as const;
