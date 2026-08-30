@@ -399,6 +399,48 @@ Fix (both together, `generate-image.ts` + `skintune-schemas.ts` +
   already confirmed correct in round 2) — this round's bug was entirely in
   `generate-image.ts`, downstream of already-correct recommendation data.
 
+**Round 4: explicit product direction — nothing in the pose/expression/
+hairstyle/environment decision may be hardcoded, ever.** Even after round
+3's fix, `generate-image.ts` still had two fixed template functions sitting
+in `buildLookEditPrompt`: `buildFallbackPoseInstruction` (a fixed
+"eye-level, waist-up, confident expression" string with only the occasion
+word swapped in) and `buildFlatteringInstruction` (3 fixed paragraphs
+branched on `profile.pronouns` — one for "women", one for "men", one
+neutral — reused verbatim on every single request regardless of the actual
+photo, look, or occasion). These ran unconditionally on every request
+(the pose fallback only when the addendum was null, but the flattering
+instruction always), meaning a real, non-negotiable slice of every
+generated image's direction was literally the same hardcoded text
+repeated across every user and every look. The user explicitly clarified
+the product intent: the ONLY fixed constraint should be that the same
+person's identity is preserved — everything else (hairstyle, expression,
+pose, environment/setting, what makes the photo flattering) must be a
+genuine, fresh AI decision reasoning over the actual photo + look +
+occasion each time, never a template, never keyword-matched, never
+branched on a fixed lookup like pronouns-to-paragraph.
+
+Fix: deleted both template functions entirely. `buildFlatteringInstruction`
+has no replacement function — that reasoning moved into
+`writeStylingAddendum`'s own job. `StylingAddendum` gained two more
+required fields: `environmentAndSetting` (background/lighting/setting,
+reasoned fresh per request to fit the occasion and look — explicitly
+instructed not to default to a generic backdrop) and `flatteringDirection`
+(concrete, non-generic reasoning about what will make THIS person look
+their best in THIS look, based on what the agent can actually see in the
+photo — explicitly instructed not to reuse a generic "confident and
+radiant" line). The agent's system/user prompts now also receive
+`profile.pronouns` and `context.details` purely as context for natural
+tone/occasion reasoning, explicitly told NOT to branch into a fixed set of
+phrases based on them. The only hardcoded string left in this file is
+`buildMinimalPoseFallback()` — one neutral sentence used ONLY as an
+absolute last resort when the addendum agent produced nothing at all (no
+photo provided, or every attempt failed) so the prompt isn't left with a
+hole; it is not a styling decision and never runs when the agent
+succeeded. If a future change needs a new dimension of styling decision
+(e.g. lighting mood, colour grading), add a required field to
+`StylingAddendum` and extend the agent's prompt — do not add a new
+template function to this file.
+
 **Image quality is intentionally set to the high end of the cost/latency
 tradeoff.** All three call sites (`editViaResponsesApi`,
 `editViaImagesEdit`, and the no-photo `images.generate` fallback) use
