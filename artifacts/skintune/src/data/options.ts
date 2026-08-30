@@ -131,28 +131,7 @@ export const homeOccasionShortcuts: SelectOption[] = [
   { label: 'Special Event', icon: '✨' },
 ];
 
-// Feedback "what should we change" chips.
-export const feedbackChangeOptions: SelectOption[] = [
-  { label: 'Colour', icon: '🎨' },
-  { label: 'Outfit', icon: '👗' },
-  { label: 'Jewellery', icon: '💎' },
-  { label: 'Makeup', icon: '💄' },
-  { label: 'Hairstyle', icon: '💇' },
-  { label: 'Overall Style', icon: '✨' },
-];
-
-export const feedbackFeelingOptions: SelectOption[] = [
-  { label: 'Love it', icon: '❤️' },
-  { label: 'I would wear it', icon: '👍' },
-  { label: 'Maybe', icon: '🤔' },
-  { label: 'Not my style', icon: '👎' },
-];
-
-// Look category badges applied to the 5 results, in order.
-export const lookCategoryBadges = [
-  { label: 'Best Match', icon: '⭐' },
-  { label: 'Glamorous', icon: '💎' },
-  { label: 'Elegant', icon: '🌸' },
-  { label: 'Minimal', icon: '🤍' },
-  { label: 'Modern Alternative', icon: '🔥' },
-] as const;
+// feedbackChangeOptions, feedbackFeelingOptions, and lookCategoryBadges
+// (AI-generated-look feedback chips and result badges) were removed on the
+// real-dress-search branch — that flow no longer has a generic feedback
+// screen or per-look category badges. See CLAUDE.md.

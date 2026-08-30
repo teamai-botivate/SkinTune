@@ -1,6 +1,8 @@
 # SkinTune
 
-SkinTune is a responsive frontend prototype for personal appearance intelligence. It turns a user's appearance cues, fit preferences, style, colors, restrictions, occasion, desired impression, and budget into five complete styling suggestions.
+SkinTune is a responsive frontend prototype for personal appearance intelligence. It turns a user's appearance cues, fit preferences, style, colors, restrictions, occasion, desired impression, and budget into real, purchasable dresses/outfits found from the web, then shows the user wearing whichever one they pick.
+
+**This branch (`real-dress-search`) replaces the AI-generated-look flow** (a prior version of this app had GPT-4o invent 5 outfit descriptions, then visualize them) **with real web search**: the backend searches the web (Tavily) for actual dresses matching the profile, the user picks one to try on, and `gpt-image-2` edits their own photo to show them wearing that exact real garment. See "Real dress search and try-on" below.
 
 ## Run locally
 
@@ -26,48 +28,48 @@ pnpm --filter @workspace/skintune run serve
 
 ## Project structure
 
-- `src/App.tsx` — the complete screen flow, shared shell, generic wizard step components (`SingleChoiceStep`, `MultiChoiceStep`, `HeightStep`), and local state orchestration.
-- `src/types.ts` — profile, appearance, recommendation, feedback, and generation result types (the client-facing contracts).
-- `src/data/options.ts` — every selection option list (pronouns, body build, fit, style, colours, occasion, impression, budget, feedback chips, etc.) in one place, so wizard screens stay data-driven instead of duplicating labels inline.
+- `src/App.tsx` — the complete screen flow, shared shell, generic wizard step components (`SingleChoiceStep`, `MultiChoiceStep`, `HeightStep`), the dress grid/try-on screens, and local state orchestration.
+- `src/types.ts` — profile, appearance, dress result, and shop-link types (the client-facing contracts).
+- `src/data/options.ts` — every selection option list (pronouns, body build, fit, style, colours, occasion, impression, budget, etc.) in one place, so wizard screens stay data-driven instead of duplicating labels inline.
 - `src/data/photo-diagnostics.ts` — the photo-quality problem/why-it-matters/how-to-improve copy for each `PhotoStatus`, plus the staged "Analyzing…" copy.
-- `src/services/recommendation-engine.ts` — the recommendation strategy boundary: given a `SkinTuneProfile`, returns 5 `LookRecommendation` objects.
-- `src/services/image-generation.ts` — the replaceable image-generation boundary: takes recommendations + profile + occasion context and returns them with visuals.
+- `src/services/dress-search.ts` — the real-dress-search and try-on boundary: given a `SkinTuneProfile`, searches the web for real dresses and generates a try-on image for a selected one.
 - `src/index.css` — SkinTune's visual system, typography, textures, responsive rules, and motion.
 - `src/components/` — scaffolded UI primitives and the error boundary.
 
 ## How state works
 
-The prototype keeps the active profile in React state so selections survive back navigation. A completed profile is stored as `skintune-profile` in `localStorage`; saved looks and feedback use separate keys. Returning to the app reopens the personal journal instead of restarting onboarding.
+The prototype keeps the active profile in React state so selections survive back navigation. A completed profile is stored as `skintune-profile` in `localStorage`; saved dresses use a separate key (`skintune-saved-looks`, kept for continuity — each entry now holds a `DressResult` plus its generated try-on image). Returning to the app reopens the personal journal instead of restarting onboarding.
 
-The privacy screen ("Privacy, plainly") explains this prototype storage model and includes a confirmed data-deletion action that clears the profile, saved looks, and feedback.
+The privacy screen ("Privacy, plainly") explains this prototype storage model and includes a confirmed data-deletion action that clears the profile and saved dresses.
 
 ## Interaction model
 
 Single-choice wizard screens (pronouns, age, body build, fit, priority, occasion, budget) auto-advance to the next screen a moment after you tap an option — no separate "Continue" tap needed, matching a WhatsApp-style tap → next flow. Multi-choice screens (style, colours, restrictions, impression) still require a Continue tap since you can pick more than one option. The footer Continue/Back bar is always present as a fallback (keyboard and assistive-tech navigation).
 
-## Recommendation engine and image generation — two separate boundaries
+## Real dress search and try-on (`real-dress-search` branch)
 
 ```
-Recommendation Engine  →  5 LookRecommendation objects  →  Image Generation Service  →  5 images
+Dress Search (Tavily web search)  →  10 real DressResult cards + shop links  →  user picks one  →  Try-On (gpt-image-2)  →  1 image
 ```
 
-`src/services/recommendation-engine.ts` exposes `getLookRecommendations(profile)`. It calls the backend's `POST /api/recommendations` (GPT-4o with strict JSON-schema structured output) to produce the *styling decision* — outfit, colour, jewellery, hairstyle, makeup, accessories, and the reasoning behind each of the 5 looks. If that call fails (no key configured, network issue, etc.) it falls back to a curated static mock set.
+`src/services/dress-search.ts` exposes two functions:
 
-`src/services/image-generation.ts` exposes `generateLookImages(recommendations, profile, context)`. It calls the backend's `POST /api/generate-image` **once per look, in parallel** (OpenAI `gpt-image-2`'s `images.edit`) to *visualise* those decisions — nothing more. This is deliberately one request per look rather than one batched request for all 5: bundling 5 large base64 images into a single response risked tripping body-size limits in the deployment chain (a real production bug, fixed by not batching rather than by raising limits further). Each look falls back independently to its placeholder `imageUrl` if its own request fails.
+- `searchDresses(profile, offset, limit)` calls the backend's `POST /api/search-dresses`, which searches the real web (Tavily) for dresses/outfits genuinely matching the profile's gender, style, colours, occasion, and budget — nothing hardcoded or templated, every query clause is conditional on what the user actually answered. It returns real product photos (`DressResult[]`, each with a title, image, store name, and a link to that store) plus a separate `shopLinks[]` list of general real-store pages (with price when found) not tied to any one photo — see `artifacts/api-server/src/routes/search-dresses.ts`'s doc comments for why these are two separate lists rather than one paired structure (Tavily's image results and page results come from largely different sites). `offset`/`limit` drive the "More dresses" button, which runs a fresh, slightly broadened search rather than paginating a cached list.
+- `tryOnDress(dress, profile)` calls the backend's `POST /api/try-on`, which edits the user's own uploaded photo (via `gpt-image-2`, same Responses-API-primary/`images.edit`-fallback pattern used elsewhere in this app) using the picked dress's real product photo as a second reference image, so the result shows the same person wearing that exact real garment. A GPT-4o vision agent (`writeTryOnAddendum` in `try-on.ts`) looks at both photos together and decides pose/expression/setting/fit fresh each time — nothing about pose, expression, or environment is a fixed template; see that file's doc comments and the root `CLAUDE.md` for the "nothing hardcoded" principle this whole feature follows.
 
-Unlike `recommendation-engine.ts`, this service **does** send the user's uploaded photo — the backend edits that photo per look so the generated image shows the same person, not a stranger from a text prompt. If the user skipped the photo step, the backend falls back to text-to-image generation instead (still a usable visualisation, just won't resemble the user).
+Picking a dress and disliking the try-on costs nothing — "Not this one — try another" goes straight back to the grid; "Interested" opens that dress's own store link.
 
-`src/services/photo-analysis.ts` exposes `analyzePhoto(photoUrl)`. It calls the backend's `POST /api/analyze-photo` (GPT-4o vision) to judge photo quality and estimate skin tone/undertone/contrast/confidence from the actual uploaded photo.
+`src/services/photo-analysis.ts` exposes `analyzePhoto(photoUrl)`. It calls the backend's `POST /api/analyze-photo` (GPT-4o vision) to judge photo quality and estimate skin tone/undertone/contrast/confidence from the actual uploaded photo — unchanged by this branch.
 
-**This separation is intentional and should be preserved:** an image model should visualize a styling decision, never invent its own. UI components import only these service functions — never a provider SDK directly, and never an API key (the key lives only in `artifacts/api-server`).
+**This separation is intentional and should be preserved:** UI components import only `dress-search.ts`'s functions — never Tavily or OpenAI SDKs directly, and never an API key (both keys live only in `artifacts/api-server`).
 
-### The AI is already connected
+### The AI and search are already connected
 
-`artifacts/api-server/src/routes/recommendations.ts`, `.../generate-image.ts`, and `.../analyze-photo.ts` hold the actual OpenAI calls. Set `OPENAI_API_KEY` (see `artifacts/api-server/.env.example`) to enable them — locally, or as a Render environment variable in production. `OPENAI_TEXT_MODEL` (default `gpt-4o`) and `OPENAI_IMAGE_MODEL` (default `gpt-image-2`) are overridable if you want to point at different models later.
+`artifacts/api-server/src/routes/search-dresses.ts` and `.../try-on.ts` hold the Tavily and OpenAI calls for this branch's flow (`.../analyze-photo.ts` is unchanged; `.../recommendations.ts`, `.../generate-image.ts`, and `.../refine-image.ts` are the prior AI-generated-look routes, left in place but unreachable from this branch's frontend). Set `TAVILY_API_KEY` and `OPENAI_API_KEY` (see `artifacts/api-server/.env.example`) to enable them — locally, or as Render environment variables in production. `OPENAI_TEXT_MODEL` (default `gpt-4o`) and `OPENAI_IMAGE_MODEL` (default `gpt-image-2`) are overridable if you want to point at different models later.
 
 ## Continuing the project
 
-To connect a real backend, keep `SkinTuneProfile`, `LookRecommendation`, `LookFeedback`, and `GenerationResult` (in `src/types.ts`) as the client-facing contracts, then replace the localStorage adapter and the two service implementations behind the existing UI. Keep consent and deletion behavior explicit before sending any photo beyond the browser. The app deliberately avoids wardrobe digitisation, wardrobe upload, real-time try-on, medical claims, and beauty scoring.
+To connect a real backend, keep `SkinTuneProfile`, `DressResult`, and `ShopLink` (in `src/types.ts`) as the client-facing contracts, then replace the localStorage adapter and `dress-search.ts`'s implementation behind the existing UI. Keep consent and deletion behavior explicit before sending any photo beyond the browser. The app deliberately avoids wardrobe digitisation and beauty scoring, and makes no medical or diagnostic claims — real-time try-on is now this branch's core feature, a deliberate departure from an earlier, more conservative product direction (see root `CLAUDE.md`).
 
 ## Deployment
 

@@ -5,27 +5,26 @@ import { Toaster } from '@/components/ui/toaster';
 import { ErrorBoundary } from '@/components/error-boundary';
 import {
   ArrowLeft, ArrowRight, Camera, Check, CheckCircle2, ChevronDown, ChevronRight,
-  CircleHelp, Clock3, Download, FileText, Heart, Info, LockKeyhole, Pencil, RefreshCw,
+  CircleHelp, Clock3, FileText, Heart, Info, LockKeyhole, Pencil, RefreshCw,
   RotateCcw, Save, ShieldCheck, Sparkles, Trash2, Upload, Wand2, X, SlidersHorizontal,
 } from 'lucide-react';
-import { getLookRecommendations } from './services/recommendation-engine';
-import { generateLookImages, refineLookImage } from './services/image-generation';
+import { searchDresses, tryOnDress } from './services/dress-search';
 import { analyzePhoto } from './services/photo-analysis';
 import { photoAnalysisStages, photoDiagnostics } from './data/photo-diagnostics';
 import {
   ageGroupOptions, bodyBuildOptions, budgetOptions, colorAvoidOptions, colorLoveOptions,
-  feedbackChangeOptions, feedbackFeelingOptions, fitOptions, homeOccasionShortcuts,
-  impressionOptions, lookCategoryBadges, occasionOptions, pronounOptions,
+  fitOptions, homeOccasionShortcuts,
+  impressionOptions, occasionOptions, pronounOptions,
   restrictionOptions, styleOptions, type SelectOption,
 } from './data/options';
-import type { LookRecommendation, PhotoStatus, SkinTuneProfile } from './types';
+import type { DressResult, PhotoStatus, ShopLink, SkinTuneProfile } from './types';
 
 const queryClient = new QueryClient();
 
 type Screen =
   | 'welcome' | 'home' | 'name' | 'profile' | 'age' | 'height' | 'consent' | 'photo' | 'appearance'
-  | 'body-style' | 'colors-occasion' | 'final-prefs' | 'review' | 'generating' | 'results'
-  | 'detail' | 'feedback' | 'settings';
+  | 'body-style' | 'colors-occasion' | 'final-prefs' | 'review' | 'generating' | 'dresses'
+  | 'try-on' | 'settings';
 
 const initialProfile: SkinTuneProfile = {
   name: '', pronouns: '', ageGroup: '', height: '', photoUrl: '', bodyBuild: '',
@@ -441,41 +440,25 @@ function Welcome({ onStart, onPrivacy }: { onStart: () => void; onPrivacy: () =>
   </div></div>;
 }
 
-// A real generated image is a data: URL (base64, from the mock/AI image
-// service) or an http(s) URL from a provider. The mock/placeholder state
-// uses a "/replace-with-generated/..." local path that was never meant to
-// resolve to a real file — treat that (or emptiness) as "no image yet".
-const hasRealImage = (url: string) => Boolean(url) && !url.startsWith('/replace-with-generated/');
-
-function LookVisual({ look, large = false }: { look: LookRecommendation; large?: boolean }) {
-  if (hasRealImage(look.imageUrl)) {
-    return <div className={`relative overflow-hidden rounded-[1.4rem] bg-[#e4d6c4] ${large ? 'min-h-[390px]' : 'h-56'}`}>
-      <img src={look.imageUrl} alt={`${look.title} — style visualisation`} className="size-full object-cover" loading="lazy" />
-      <span className="absolute bottom-3 left-3 rounded-full bg-card/80 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.14em] text-foreground backdrop-blur">Style visualisation</span>
-    </div>;
-  }
-  return <div className={`relative overflow-hidden rounded-[1.4rem] bg-[#e4d6c4] ${large ? 'min-h-[390px]' : 'h-56'}`} data-image-url={look.imageUrl} aria-label={`${look.title} visual placeholder`}>
-    <div className="absolute inset-0 opacity-75" style={{ background: `radial-gradient(circle at 68% 21%, ${look.palette[1]} 0 8%, transparent 8.5%), linear-gradient(145deg, ${look.palette[2]} 0 38%, ${look.palette[0]} 38% 70%, #b78668 70%)` }} />
-    <div className="absolute bottom-[-8%] left-[23%] h-[82%] w-[55%] rounded-t-[48%] bg-card/70 mix-blend-screen" />
-    <div className="absolute left-[39%] top-[16%] size-[22%] rounded-full bg-[#b7785c]" />
-    <div className="absolute bottom-[15%] left-1/2 h-[42%] w-[20%] -translate-x-1/2 rounded-[45%] bg-card/55" />
-    <span className="absolute bottom-3 left-3 rounded-full bg-card/80 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.14em] text-foreground backdrop-blur">Style visualisation · image slot</span>
+function DressVisual({ dress, large = false }: { dress: DressResult; large?: boolean }) {
+  return <div className={`relative overflow-hidden rounded-[1.4rem] bg-[#e4d6c4] ${large ? 'min-h-[390px]' : 'h-56'}`}>
+    <img src={dress.imageUrl} alt={dress.title} className="size-full object-cover" loading="lazy" />
+    <span className="absolute bottom-3 left-3 rounded-full bg-card/80 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.14em] text-foreground backdrop-blur">{dress.siteName}</span>
   </div>;
 }
 
-// Stages the "Generating" screen cycles through. Real generation (5 images,
-// each ~30s-100s depending on image-model quality settings) takes far
-// longer than these stages alone would suggest, so this deliberately keeps
-// cycling/animating for as long as the screen is mounted rather than
+// Stages the "Generating" screen cycles through while the first page of
+// real dresses is being searched. A real web search plus building the
+// shopping-links section can take a few real seconds, so this deliberately
+// keeps cycling/animating for as long as the screen is mounted rather than
 // finishing early and sitting static — see the interval logic below.
 const generatingStages = [
   'Reading the room',
-  'Balancing your palette',
-  'Building complete outfits',
-  'Styling every detail',
-  'Fitting each piece to you',
-  'Rendering your look',
-  'Adding the finishing touches',
+  'Searching real stores',
+  'Matching your palette',
+  'Finding pieces that fit your build',
+  'Checking what’s actually in stock',
+  'Lining up your top picks',
 ];
 
 function Generating() {
@@ -506,140 +489,82 @@ function Generating() {
     <div className="mt-6 h-1.5 max-w-md overflow-hidden rounded-full bg-secondary">
       <div className="h-full w-1/3 animate-[indeterminate_1.6s_ease-in-out_infinite] rounded-full bg-primary" />
     </div>
-    <p className="mt-8 flex items-center gap-2 text-xs text-muted-foreground"><Clock3 size={14} /> {elapsedSeconds < 5 ? 'Getting started…' : `${minutes > 0 ? `${minutes}m ` : ''}${seconds}s so far — five complete looks take real, careful work.`}</p>
+    <p className="mt-8 flex items-center gap-2 text-xs text-muted-foreground"><Clock3 size={14} /> {elapsedSeconds < 5 ? 'Getting started…' : `${minutes > 0 ? `${minutes}m ` : ''}${seconds}s so far — searching real stores takes a moment.`}</p>
   </div></div>;
 }
 
-function Home({ profile, savedLooks, generatedLooks, onNew, onResults, onSettings, onLook, onQuickStart }: {
-  profile: SkinTuneProfile; savedLooks: string[]; generatedLooks: LookRecommendation[]; onNew: () => void; onResults: () => void;
-  onSettings: () => void; onLook: (id: string) => void; onQuickStart: (occasion: string) => void;
+type SavedDress = { dress: DressResult; imageUrl: string };
+
+function Home({ profile, savedDresses, onNew, onResults, onSettings, onQuickStart }: {
+  profile: SkinTuneProfile; savedDresses: SavedDress[]; onNew: () => void; onResults: () => void;
+  onSettings: () => void; onQuickStart: (occasion: string) => void;
 }) {
   return <div className="noise min-h-[100dvh]"><Header onSettings={onSettings} name={profile.name} /><main className="mx-auto max-w-6xl px-4 py-10 sm:px-8 sm:py-16">
     <div className="grid gap-10 lg:grid-cols-[1.1fr_.9fr] lg:items-end">
       <div className="animate-rise"><p className="text-xs font-bold uppercase tracking-[.22em] text-primary">How can SkinTune style you today?</p><h1 className="mt-4 max-w-2xl font-serif text-[clamp(3rem,7vw,6.2rem)] leading-[.88] tracking-[-.05em]">Good to see you,<br /><em className="text-primary">{profile.name}.</em></h1><p className="mt-6 max-w-lg text-lg leading-relaxed text-muted-foreground">Pick a moment to get dressed for, or pick up where you left off.</p>
         <div className="mt-7 flex flex-wrap gap-2">{homeOccasionShortcuts.map((item) => <button type="button" key={item.label} onClick={() => onQuickStart(item.label)} data-testid={`button-quickstart-${item.label.toLowerCase().replace(/\s+/g, '-')}`} className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-semibold transition hover:-translate-y-0.5 hover:border-primary/50"><span aria-hidden>{item.icon}</span>{item.label}</button>)}</div>
-        <div className="mt-6 flex flex-wrap gap-3"><button type="button" onClick={onResults} data-testid="button-view-looks" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3.5 text-sm font-bold text-primary-foreground shadow-lg">View your five looks <ArrowRight size={16} /></button><button type="button" onClick={onNew} data-testid="button-new-edit" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-6 py-3.5 text-sm font-bold hover:border-primary/50"><RefreshCw size={16} /> New edit</button></div>
+        <div className="mt-6 flex flex-wrap gap-3"><button type="button" onClick={onResults} data-testid="button-view-looks" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3.5 text-sm font-bold text-primary-foreground shadow-lg">Browse dresses for you <ArrowRight size={16} /></button><button type="button" onClick={onNew} data-testid="button-new-edit" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-6 py-3.5 text-sm font-bold hover:border-primary/50"><RefreshCw size={16} /> New edit</button></div>
       </div>
       <div className="soft-grid relative overflow-hidden rounded-[1.7rem] border border-border bg-secondary/60 p-7"><div className="absolute -right-14 -top-14 size-48 rounded-full bg-primary/15 blur-2xl" /><p className="relative text-xs font-bold uppercase tracking-[.16em] text-muted-foreground">Your signature direction</p><h2 className="relative mt-3 font-serif text-3xl">Rich, considered, quietly luxe.</h2><div className="relative mt-7 flex items-end gap-2"><div className="h-20 w-12 rounded-t-full bg-[#c9a35c]" /><div className="h-28 w-12 rounded-t-full bg-[#1c1917]" /><div className="h-16 w-12 rounded-t-full bg-[#e8d5a3]" /><div className="h-24 w-12 rounded-t-full bg-[#8a6d3f]" /></div><p className="relative mt-6 text-sm leading-relaxed text-muted-foreground">Your saved palette leans into depth and gold, with room for one clear surprise.</p></div>
     </div>
-    {savedLooks.length > 0 && <section className="mt-20"><div className="flex items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-primary">Saved for later</p><h2 className="mt-2 font-serif text-3xl">Your keepers</h2></div><button type="button" onClick={onResults} data-testid="button-see-all-saved" className="focus-ring text-sm font-bold text-primary">See all <ArrowRight className="ml-1 inline" size={15} /></button></div><div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{savedLooks.map((id) => { const look = generatedLooks.find((item) => item.id === id); return look && <button type="button" key={id} onClick={() => onLook(id)} data-testid={`card-saved-look-${id}`} className="focus-ring rounded-[1.3rem] border border-border bg-card p-2 text-left transition hover:-translate-y-1"><LookVisual look={look} /><p className="px-3 pb-2 pt-3 font-serif text-xl">{look.title}</p></button>; })}</div></section>}
+    {savedDresses.length > 0 && <section className="mt-20"><div className="flex items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-primary">Saved for later</p><h2 className="mt-2 font-serif text-3xl">Your keepers</h2></div><button type="button" onClick={onResults} data-testid="button-see-all-saved" className="focus-ring text-sm font-bold text-primary">See all <ArrowRight className="ml-1 inline" size={15} /></button></div><div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{savedDresses.map((saved) => <a key={saved.dress.id} href={saved.dress.sourceUrl} target="_blank" rel="noreferrer" data-testid={`card-saved-look-${saved.dress.id}`} className="focus-ring rounded-[1.3rem] border border-border bg-card p-2 text-left transition hover:-translate-y-1"><div className="relative h-56 overflow-hidden rounded-[1.15rem] bg-[#e4d6c4]"><img src={saved.imageUrl} alt={saved.dress.title} className="size-full object-cover" loading="lazy" /></div><p className="px-3 pb-2 pt-3 font-serif text-xl">{saved.dress.title}</p></a>)}</div></section>}
   </main></div>;
 }
 
-function Results({ profile, looks: resultLooks, savedLooks, onSave, onLook, onFeedback, onBack }: { profile: SkinTuneProfile; looks: LookRecommendation[]; savedLooks: string[]; onSave: (id: string) => void; onLook: (id: string) => void; onFeedback: () => void; onBack: () => void }) {
+function DressGrid({ profile, dresses, shopLinks, hasMore, loadingMore, onTryOn, onLoadMore, onBack }: {
+  profile: SkinTuneProfile; dresses: DressResult[]; shopLinks: ShopLink[]; hasMore: boolean; loadingMore: boolean;
+  onTryOn: (dress: DressResult) => void; onLoadMore: () => void; onBack: () => void;
+}) {
   return <Shell profile={profile} onBack={onBack} onSettings={onBack}><div className="animate-rise">
-    <div className="flex flex-wrap items-end justify-between gap-6"><div><p className="text-xs font-bold uppercase tracking-[.2em] text-primary">✨ Your 5 Best Looks</p><h1 className="mt-3 font-serif text-[clamp(2.8rem,6vw,5.4rem)] leading-[.9] tracking-[-.05em]">A wardrobe of<br /><em className="text-primary">possibilities.</em></h1></div><button type="button" onClick={onFeedback} data-testid="button-request-changes" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-3 text-sm font-bold hover:border-primary/50"><SlidersHorizontal size={16} /> Change the direction</button></div>
-    <p className="mt-6 max-w-xl text-muted-foreground">Built for {profile.occasion.toLowerCase() || 'your moment'} with a {profile.impression.join(' and ').toLowerCase() || 'considered'} energy. Nothing here is a rule — just five places to begin.</p>
-    <div className="mt-10 grid gap-6 md:grid-cols-2 lg:grid-cols-3">{resultLooks.map((look, index) => {
-      const badge = lookCategoryBadges[index] ?? lookCategoryBadges[lookCategoryBadges.length - 1];
-      return <article key={look.id} className={`group rounded-[1.45rem] border border-border bg-card p-2 shadow-[0_8px_30px_hsl(var(--foreground)/.04)] ${index === 0 ? 'md:col-span-2 lg:col-span-2' : ''}`}>
-        <button type="button" onClick={() => onLook(look.id)} data-testid={`card-look-${look.id}`} className="focus-ring block w-full text-left">
-          <LookVisual look={look} large={index === 0} />
-          <div className="p-4 pb-3"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[.15em] text-primary">{badge.icon} {badge.label}</p><h2 className="mt-1 font-serif text-2xl">{look.title}</h2></div><ChevronRight className="mt-2 text-muted-foreground transition group-hover:translate-x-1" size={20} /></div>
-            <p className="mt-2 text-sm text-muted-foreground">{look.note}</p>
-            <dl className="mt-5 grid gap-x-4 gap-y-3 border-t border-border/70 pt-4 sm:grid-cols-2">
-              <div><dt className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">Outfit</dt><dd className="mt-1 text-sm leading-snug">{look.outfit}</dd></div>
-              <div><dt className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">Jewellery</dt><dd className="mt-1 text-sm leading-snug">{look.jewellery}</dd></div>
-              <div><dt className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">Hairstyle</dt><dd className="mt-1 text-sm leading-snug">{look.hairstyle}</dd></div>
-              <div><dt className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">Makeup</dt><dd className="mt-1 text-sm leading-snug">{look.makeup}</dd></div>
-            </dl>
+    <div className="flex flex-wrap items-end justify-between gap-6"><div><p className="text-xs font-bold uppercase tracking-[.2em] text-primary">✨ Real Dresses For You</p><h1 className="mt-3 font-serif text-[clamp(2.8rem,6vw,5.4rem)] leading-[.9] tracking-[-.05em]">Pick one to<br /><em className="text-primary">try it on.</em></h1></div></div>
+    <p className="mt-6 max-w-xl text-muted-foreground">Real pieces from real stores, matched to {profile.occasion.toLowerCase() || 'your moment'}. Tap any one to see it on you, then decide if it's worth buying.</p>
+    <div className="mt-10 grid gap-6 md:grid-cols-2 lg:grid-cols-3">{dresses.map((dress) =>
+      <article key={dress.id} className="group rounded-[1.45rem] border border-border bg-card p-2 shadow-[0_8px_30px_hsl(var(--foreground)/.04)]">
+        <button type="button" onClick={() => onTryOn(dress)} data-testid={`card-dress-${dress.id}`} className="focus-ring block w-full text-left">
+          <DressVisual dress={dress} />
+          <div className="p-4 pb-3"><div className="flex items-start justify-between gap-3"><h2 className="min-w-0 font-serif text-xl leading-snug line-clamp-2">{dress.title}</h2><ChevronRight className="mt-1 shrink-0 text-muted-foreground transition group-hover:translate-x-1" size={20} /></div>
+            <p className="mt-2 text-xs font-bold uppercase tracking-[.13em] text-primary">{dress.siteName}</p>
           </div>
         </button>
-        <div className="flex items-center justify-between border-t border-border/70 px-4 py-3"><span className="flex items-center gap-2"><span className="flex gap-1.5">{look.palette.map((color) => <i key={color} className="size-4 rounded-full border border-card shadow-sm" style={{ backgroundColor: color }} />)}</span><span className="text-xs font-semibold text-muted-foreground">{look.confidence}% confidence</span></span><button type="button" onClick={() => onSave(look.id)} data-testid={`button-save-${look.id}`} className={`focus-ring inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold ${savedLooks.includes(look.id) ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary'}`}>{savedLooks.includes(look.id) ? <Check size={14} /> : <Heart size={14} />} {savedLooks.includes(look.id) ? 'Saved' : 'Save'}</button></div>
-      </article>;
-    })}</div>
-    <div className="mt-10 rounded-2xl border border-border bg-secondary/55 p-5 text-sm text-muted-foreground"><div className="flex items-start gap-3"><Info size={17} className="mt-0.5 shrink-0 text-primary" /><p>Style visualisation — actual fit, fabric fall and real-world colour may vary. These looks are starting points shaped around your answers; keep what feels like you, skip what doesn’t, and tell us what to change.</p></div></div>
+        <div className="flex items-center justify-between border-t border-border/70 px-4 py-3"><button type="button" onClick={() => onTryOn(dress)} data-testid={`button-try-on-${dress.id}`} className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-3 py-2 text-xs font-bold text-primary-foreground"><Wand2 size={14} /> Try this on</button></div>
+      </article>
+    )}</div>
+    {hasMore && <div className="mt-8 flex justify-center"><button type="button" onClick={onLoadMore} disabled={loadingMore} data-testid="button-load-more-dresses" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-6 py-3 text-sm font-bold hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-60">{loadingMore ? <RefreshCw size={15} className="animate-spin" /> : <ChevronDown size={15} />} {loadingMore ? 'Finding more…' : 'More dresses'}</button></div>}
+    {shopLinks.length > 0 && <div className="mt-14"><p className="text-xs font-bold uppercase tracking-[.18em] text-primary">Shop these online</p><h2 className="mt-2 font-serif text-3xl">More real stores worth a look.</h2>
+      <div className="mt-6 grid gap-3 sm:grid-cols-2">{shopLinks.map((link) => <a key={link.url} href={link.url} target="_blank" rel="noreferrer" data-testid={`link-shop-${link.siteName.toLowerCase()}`} className="focus-ring flex items-center justify-between gap-3 rounded-2xl border border-border bg-card p-4 transition hover:-translate-y-0.5 hover:border-primary/45">
+        <span className="min-w-0"><span className="block truncate font-semibold">{link.title}</span><span className="text-xs font-bold uppercase tracking-[.1em] text-muted-foreground">{link.siteName}</span></span>
+        {link.price && <span className="shrink-0 rounded-full bg-secondary px-3 py-1 text-xs font-bold">{link.price}</span>}
+      </a>)}</div>
+    </div>}
+    <div className="mt-10 rounded-2xl border border-border bg-secondary/55 p-5 text-sm text-muted-foreground"><div className="flex items-start gap-3"><Info size={17} className="mt-0.5 shrink-0 text-primary" /><p>These are real, purchasable pieces found from real stores — availability, price, and sizing can change on the store's own site. "Try this on" shows a visualisation of you wearing it; always confirm details before buying.</p></div></div>
   </div></Shell>;
 }
 
-/** Triggers a browser download of a data-URL image (works for base64 data: URLs; a same-origin http(s) URL would need a fetch+blob step instead). */
-function downloadLookImage(imageUrl: string, title: string) {
-  const link = document.createElement('a');
-  link.href = imageUrl;
-  link.download = `skintune-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.jpg`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-}
-
-function LookDetail({ look, profile, saved, onSave, onBack, onFeedback, onRefined }: {
-  look: LookRecommendation; profile: SkinTuneProfile; saved: boolean;
-  onSave: () => void; onBack: () => void; onFeedback: () => void; onRefined: (look: LookRecommendation) => void;
+function TryOn({ dress, profile, imageUrl, loading, error, saved, onSave, onBack, onTryAnother, onRetry }: {
+  dress: DressResult; profile: SkinTuneProfile; imageUrl: string; loading: boolean; error: string; saved: boolean;
+  onSave: () => void; onBack: () => void; onTryAnother: () => void; onRetry: () => void;
 }) {
-  const [showRetry, setShowRetry] = useState(false);
-  const [customization, setCustomization] = useState('');
-  const [refining, setRefining] = useState(false);
-  const [refineError, setRefineError] = useState('');
-  const hasImage = hasRealImage(look.imageUrl);
-
-  const submitRetry = async () => {
-    if (!customization.trim()) return;
-    setRefining(true);
-    setRefineError('');
-    try {
-      const refined = await refineLookImage(look, profile, { occasion: profile.occasion, details: '' }, customization.trim());
-      onRefined(refined);
-      setShowRetry(false);
-      setCustomization('');
-    } catch (err) {
-      setRefineError('That retry didn’t go through. Please try again.');
-      console.warn('Refine failed:', err);
-    } finally {
-      setRefining(false);
-    }
-  };
-
-  return <div className="noise min-h-[100dvh]"><Header onBack={onBack} onSettings={onBack} /><main className="mx-auto max-w-6xl px-4 py-8 sm:px-8 sm:py-14"><div className="grid gap-8 lg:grid-cols-[.9fr_1.1fr] lg:items-start">
+  return <div className="noise min-h-[100dvh]"><Header onBack={onBack} onSettings={onBack} /><main className="mx-auto max-w-5xl px-4 py-8 sm:px-8 sm:py-14"><div className="grid gap-8 lg:grid-cols-[1fr_.85fr] lg:items-start">
     <div>
-      <LookVisual look={look} large />
-      {hasImage && <div className="mt-3 flex flex-wrap gap-2">
-        <button type="button" onClick={() => downloadLookImage(look.imageUrl, look.title)} data-testid="button-download-image" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-bold hover:border-primary/50"><Download size={15} /> Download image</button>
-        <button type="button" onClick={() => setShowRetry((v) => !v)} data-testid="button-retry-look" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-bold hover:border-primary/50"><Wand2 size={15} /> Retry with changes</button>
-      </div>}
-      {showRetry && <div className="mt-4 animate-rise rounded-2xl border border-primary/25 bg-primary/5 p-5" data-testid="panel-retry-customization">
-        <p className="text-sm font-bold">What should we change about this image?</p>
-        <p className="mt-1 text-xs text-muted-foreground">We'll keep the same look and the same you, just apply this correction — e.g. "make the sleeves longer" or "different shoe colour".</p>
-        <textarea value={customization} onChange={(e) => setCustomization(e.target.value)} data-testid="textarea-retry-customization" rows={3} placeholder="Make the sleeves longer, and a lighter shade of the same colour." className="focus-ring mt-3 w-full resize-none rounded-2xl border border-border bg-card p-4 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/55" />
-        {refineError && <p className="mt-2 text-xs font-semibold text-destructive">{refineError}</p>}
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" onClick={submitRetry} disabled={!customization.trim() || refining} data-testid="button-submit-retry" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50">{refining ? <RefreshCw size={15} className="animate-spin" /> : <Wand2 size={15} />} {refining ? 'Regenerating…' : 'Regenerate this look'}</button>
-          <button type="button" onClick={() => { setShowRetry(false); setCustomization(''); setRefineError(''); }} disabled={refining} data-testid="button-cancel-retry" className="focus-ring rounded-full px-4 py-2.5 text-sm font-bold text-muted-foreground hover:bg-secondary">Cancel</button>
-        </div>
-      </div>}
+      <div className="relative min-h-[420px] overflow-hidden rounded-[1.4rem] bg-[#e4d6c4]">
+        {imageUrl ? <img src={imageUrl} alt={`You wearing ${dress.title}`} className="size-full object-cover" /> : <div className="absolute inset-0 grid place-items-center">
+          {loading ? <div className="flex flex-col items-center gap-3 text-center" data-testid="text-try-on-loading"><span className="relative grid size-11 place-items-center"><span className="absolute inset-0 animate-ping rounded-full bg-primary/40" /><span className="relative grid size-11 place-items-center rounded-full bg-primary text-primary-foreground"><RefreshCw size={18} className="animate-spin" /></span></span><p className="max-w-[220px] text-sm font-semibold text-foreground/80">Trying this on for you…</p></div>
+            : error ? <div className="flex flex-col items-center gap-3 px-6 text-center"><p className="text-sm font-semibold text-destructive">{error}</p><button type="button" onClick={onRetry} data-testid="button-retry-try-on" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground"><RefreshCw size={15} /> Try again</button></div>
+            : null}
+        </div>}
+      </div>
     </div>
     <div className="animate-rise lg:pt-4">
-      <p className="text-xs font-bold uppercase tracking-[.18em] text-primary">The complete look</p>
-      <h1 className="mt-4 font-serif text-[clamp(3rem,7vw,6rem)] leading-[.86] tracking-[-.05em]">{look.title}</h1>
-      <p className="mt-6 max-w-md text-lg leading-relaxed text-muted-foreground">{look.note}</p>
-      <div className="mt-7 flex items-center gap-3"><div className="flex gap-2">{look.palette.map((color) => <span key={color} className="size-8 rounded-full border-2 border-card shadow-sm" style={{ backgroundColor: color }} />)}</div><span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-bold">{look.confidence}% confidence</span></div>
-      <div className="mt-10 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">👗 Outfit</p><p className="mt-2 font-semibold">{look.outfit}</p></div>
-        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">🎨 Colour</p><p className="mt-2 font-semibold">{look.outfitColor}</p></div>
-        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">💎 Jewellery</p><p className="mt-2 font-semibold">{look.jewellery}</p></div>
-        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">💇 Hairstyle</p><p className="mt-2 font-semibold">{look.hairstyle}</p></div>
-        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">💄 Makeup</p><p className="mt-2 font-semibold">{look.makeup}</p></div>
-        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">👠 Footwear</p><p className="mt-2 font-semibold">{look.footwear}</p></div>
-        <div className="rounded-2xl border border-border bg-card p-4 sm:col-span-2"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">👜 Accessories</p><p className="mt-2 font-semibold">{look.accessories}</p></div>
+      <p className="text-xs font-bold uppercase tracking-[.18em] text-primary">{dress.siteName}</p>
+      <h1 className="mt-4 font-serif text-[clamp(2.2rem,5vw,3.4rem)] leading-[.98] tracking-[-.03em]">{dress.title}</h1>
+      <p className="mt-5 text-sm leading-relaxed text-muted-foreground">A real piece from {dress.siteName}, shown on your own photo. Fit, fabric fall, and real-world colour may vary from the photo.</p>
+      <div className="mt-8 flex flex-wrap gap-3">
+        <a href={dress.sourceUrl} target="_blank" rel="noreferrer" data-testid="button-interested" className={`focus-ring inline-flex items-center gap-2 rounded-full px-5 py-3 text-sm font-bold ${imageUrl ? 'bg-primary text-primary-foreground' : 'pointer-events-none bg-secondary text-muted-foreground'}`}><Heart size={16} /> Interested — visit {dress.siteName}</a>
+        <button type="button" onClick={onTryAnother} data-testid="button-try-another" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold hover:border-primary/50"><X size={16} /> Not this one — try another</button>
       </div>
-      <div className="mt-8 rounded-2xl border border-accent/25 bg-accent/7 p-5"><p className="font-serif text-2xl">Why SkinTune chose this</p><ul className="mt-4 grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">{look.reasoning.map((reason) => <li key={reason} className="flex gap-2"><Check size={16} className="mt-0.5 shrink-0 text-accent" /> {reason}</li>)}</ul></div>
-      <div className="mt-6 divide-y divide-border border-y border-border">{look.pieces.map((piece) => <div key={piece.category} className="grid grid-cols-[72px_1fr] gap-4 py-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{piece.category}</p><div><p className="font-semibold">{piece.name}</p><p className="mt-1 text-sm leading-relaxed text-muted-foreground">{piece.detail}</p></div></div>)}</div>
-      <p className="mt-5 text-xs leading-relaxed text-muted-foreground">Style visualisation — actual fit, fabric fall and real-world colour may vary.</p>
-      <div className="mt-8 flex flex-wrap gap-3"><button type="button" onClick={onSave} data-testid="button-detail-save" className={`focus-ring inline-flex items-center gap-2 rounded-full px-5 py-3 text-sm font-bold ${saved ? 'bg-secondary' : 'bg-primary text-primary-foreground'}`}>{saved ? <Check size={16} /> : <Save size={16} />} {saved ? 'Saved to your journal' : 'Save this look'}</button><button type="button" onClick={onFeedback} data-testid="button-detail-not-for-me" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold hover:border-primary/50"><X size={16} /> Not my style</button></div>
+      {imageUrl && <button type="button" onClick={onSave} data-testid="button-save-tryon" className={`focus-ring mt-3 inline-flex items-center gap-2 rounded-full px-5 py-3 text-sm font-bold ${saved ? 'bg-secondary' : 'border border-border bg-card hover:border-primary/50'}`}>{saved ? <Check size={16} /> : <Save size={16} />} {saved ? 'Saved to your journal' : 'Save this'}</button>}
     </div>
   </div></main></div>;
-}
-
-function Feedback({ feeling, setFeeling, changeAreas, toggleChangeArea, request, setRequest, onBack, onDone }: {
-  feeling: string; setFeeling: (v: string) => void; changeAreas: string[]; toggleChangeArea: (v: string) => void;
-  request: string; setRequest: (v: string) => void; onBack: () => void; onDone: () => void;
-}) {
-  const notMyStyle = feeling === 'Not my style';
-  return <div className="noise min-h-[100dvh]"><Header onBack={onBack} onSettings={onBack} /><main className="mx-auto max-w-2xl px-4 py-12 sm:px-8 sm:py-20"><Intro eyebrow="A better next edit" title="How did this land?" body="Your honest reaction helps us keep your taste at the center.">
-    <div className="grid gap-3 sm:grid-cols-2">{feedbackFeelingOptions.map((item) => <OptionCard key={item.label} label={item.label} icon={item.icon} selected={feeling === item.label} onClick={() => setFeeling(feeling === item.label ? '' : item.label)} />)}</div>
-    {notMyStyle && <div className="mt-8 animate-rise" data-testid="panel-what-to-change"><p className="mb-3 text-sm font-bold">What should we change?</p><div className="grid gap-3 sm:grid-cols-2">{feedbackChangeOptions.map((item) => <OptionCard key={item.label} label={item.label} icon={item.icon} selected={changeAreas.includes(item.label)} onClick={() => toggleChangeArea(item.label)} />)}</div></div>}
-    <label className="mt-7 block"><span className="mb-2 block text-sm font-bold">Anything else? <span className="font-normal text-muted-foreground">optional</span></span><textarea value={request} onChange={(e) => setRequest(e.target.value)} data-testid="textarea-change-request" rows={4} placeholder="More relaxed, fewer layers, a little brighter…" className="focus-ring w-full resize-none rounded-2xl border border-border bg-card p-4 outline-none placeholder:text-muted-foreground/55" /></label>
-    <FooterActions onBack={onBack} onContinue={onDone} disabled={!feeling} label={notMyStyle ? '🔄 Create New Looks' : 'Save feedback'} />
-  </Intro></main></div>;
 }
 
 function Settings({ profile, onBack, onDelete, deletedNotice }: { profile: SkinTuneProfile; onBack: () => void; onDelete: () => void; deletedNotice: boolean }) {
@@ -661,49 +586,74 @@ function Settings({ profile, onBack, onDelete, deletedNotice }: { profile: SkinT
 
 // ---------- Root app ----------
 
+const DRESS_PAGE_SIZE = 10;
+
 function SkinTune() {
   const [screen, setScreen] = useState<Screen>(() => localStorage.getItem('skintune-profile') ? 'home' : 'welcome');
   const [profile, setProfile] = useState<SkinTuneProfile>(() => { try { return { ...initialProfile, ...JSON.parse(localStorage.getItem('skintune-profile') || '{}') }; } catch { return initialProfile; } });
-  const [detailId, setDetailId] = useState('look-01');
-  const [savedLooks, setSavedLooks] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem('skintune-saved-looks') || '[]'); } catch { return []; } });
-  const [feeling, setFeeling] = useState('');
-  const [changeAreas, setChangeAreas] = useState<string[]>([]);
-  const [changeRequest, setChangeRequest] = useState('');
-  const [generatedLooks, setGeneratedLooks] = useState<LookRecommendation[]>([]);
+  const [savedDresses, setSavedDresses] = useState<SavedDress[]>(() => { try { return JSON.parse(localStorage.getItem('skintune-saved-looks') || '[]'); } catch { return []; } });
   const [deletedNotice, setDeletedNotice] = useState(false);
+
+  // Real-dress-search state: the current page of results, "shop these
+  // online" links (fetched once alongside the first page), whether another
+  // page is worth loading, and the dress currently being tried on.
+  const [dresses, setDresses] = useState<DressResult[]>([]);
+  const [shopLinks, setShopLinks] = useState<ShopLink[]>([]);
+  const [hasMoreDresses, setHasMoreDresses] = useState(false);
+  const [loadingMoreDresses, setLoadingMoreDresses] = useState(false);
+  const [selectedDress, setSelectedDress] = useState<DressResult | null>(null);
+  const [tryOnImageUrl, setTryOnImageUrl] = useState('');
+  const [tryOnLoading, setTryOnLoading] = useState(false);
+  const [tryOnError, setTryOnError] = useState('');
 
   const update = (patch: Partial<SkinTuneProfile>) => setProfile((old) => ({ ...old, ...patch }));
   const index = wizardScreens.indexOf(screen);
   const go = (next: Screen) => { setScreen(next); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-  const back = () => { if (screen === 'detail' || screen === 'feedback') go('results'); else if (index > 0) go(wizardScreens[index - 1]); else go(profile.name ? 'home' : 'welcome'); };
+  const back = () => { if (screen === 'try-on') go('dresses'); else if (index > 0) go(wizardScreens[index - 1]); else go(profile.name ? 'home' : 'welcome'); };
   const saveProfile = () => { localStorage.setItem('skintune-profile', JSON.stringify(profile)); go('generating'); };
   const openSettings = () => go(profile.name ? 'settings' : 'welcome');
-  const toggleChangeArea = (v: string) => setChangeAreas((old) => old.includes(v) ? old.filter((item) => item !== v) : [...old, v]);
+
+  const runTryOn = (dress: DressResult) => {
+    setSelectedDress(dress);
+    setTryOnImageUrl('');
+    setTryOnError('');
+    setTryOnLoading(true);
+    go('try-on');
+    tryOnDress(dress, profile)
+      .then((imageUrl) => setTryOnImageUrl(imageUrl))
+      .catch((err) => { setTryOnError('That try-on didn’t go through. Please try again.'); console.warn('Try-on failed:', err); })
+      .finally(() => setTryOnLoading(false));
+  };
 
   useEffect(() => {
     if (screen !== 'generating') return;
     let active = true;
-    getLookRecommendations(profile)
-      .then((recommendations) => generateLookImages(recommendations, profile, { occasion: profile.occasion, details: '' }))
-      .then((result) => { if (active) { setGeneratedLooks(result); go('results'); } });
+    searchDresses(profile, 0, DRESS_PAGE_SIZE).then((page) => {
+      if (!active) return;
+      setDresses(page.results);
+      setShopLinks(page.shopLinks);
+      setHasMoreDresses(page.hasMore);
+      go('dresses');
+    });
     return () => { active = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: generation begins once per entry into this screen
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: search begins once per entry into this screen
   }, [screen]);
 
-  useEffect(() => { localStorage.setItem('skintune-saved-looks', JSON.stringify(savedLooks)); }, [savedLooks]);
+  useEffect(() => { localStorage.setItem('skintune-saved-looks', JSON.stringify(savedDresses)); }, [savedDresses]);
 
-  const currentLook = useMemo(() => generatedLooks.find((item) => item.id === detailId) || generatedLooks[0], [generatedLooks, detailId]);
+  const isDressSaved = (dressId: string) => savedDresses.some((item) => item.dress.id === dressId);
 
   if (screen === 'welcome') return <Welcome onStart={() => go('name')} onPrivacy={() => go('settings')} />;
-  if (screen === 'home') return <Home profile={profile} savedLooks={savedLooks} generatedLooks={generatedLooks} onNew={() => { update({ photoUrl: '' }); go('name'); }} onResults={() => go(generatedLooks.length ? 'results' : 'generating')} onSettings={openSettings} onLook={(id) => { setDetailId(id); go('detail'); }} onQuickStart={(occasion) => { update({ occasion }); go('final-prefs'); }} />;
+  if (screen === 'home') return <Home profile={profile} savedDresses={savedDresses} onNew={() => { update({ photoUrl: '' }); go('name'); }} onResults={() => go(dresses.length ? 'dresses' : 'generating')} onSettings={openSettings} onQuickStart={(occasion) => { update({ occasion }); go('final-prefs'); }} />;
   if (screen === 'settings') return <Settings profile={profile} deletedNotice={deletedNotice} onBack={() => go(profile.name ? 'home' : 'welcome')} onDelete={() => { localStorage.removeItem('skintune-profile'); localStorage.removeItem('skintune-saved-looks'); localStorage.removeItem('skintune-feedback'); setProfile(initialProfile); setDeletedNotice(true); setTimeout(() => go('welcome'), 900); }} />;
   if (screen === 'photo') return <PhotoPanel profile={profile} update={update} onContinue={() => go('appearance')} onBack={back} />;
-  if (screen === 'results') return <Results profile={profile} looks={generatedLooks} savedLooks={savedLooks} onSave={(id) => setSavedLooks((old) => old.includes(id) ? old.filter((item) => item !== id) : [...old, id])} onLook={(id) => { setDetailId(id); go('detail'); }} onFeedback={() => go('feedback')} onBack={() => go('home')} />;
-  if (screen === 'detail' && currentLook) return <LookDetail look={currentLook} profile={profile} saved={savedLooks.includes(currentLook.id)} onSave={() => setSavedLooks((old) => old.includes(currentLook.id) ? old.filter((item) => item !== currentLook.id) : [...old, currentLook.id])} onBack={back} onFeedback={() => go('feedback')} onRefined={(refined) => setGeneratedLooks((old) => old.map((item) => item.id === refined.id ? refined : item))} />;
-  if (screen === 'feedback') return <Feedback feeling={feeling} setFeeling={setFeeling} changeAreas={changeAreas} toggleChangeArea={toggleChangeArea} request={changeRequest} setRequest={setChangeRequest} onBack={back} onDone={() => {
-    localStorage.setItem('skintune-feedback', JSON.stringify({ feeling, changeAreas, changeRequest }));
-    if (feeling === 'Not my style') { setFeeling(''); setChangeAreas([]); setChangeRequest(''); go('generating'); } else { go('results'); }
-  }} />;
+  if (screen === 'dresses') return <DressGrid profile={profile} dresses={dresses} shopLinks={shopLinks} hasMore={hasMoreDresses} loadingMore={loadingMoreDresses} onTryOn={runTryOn} onLoadMore={() => {
+    setLoadingMoreDresses(true);
+    searchDresses(profile, dresses.length, DRESS_PAGE_SIZE)
+      .then((page) => { setDresses((old) => [...old, ...page.results]); setHasMoreDresses(page.hasMore); })
+      .finally(() => setLoadingMoreDresses(false));
+  }} onBack={() => go('home')} />;
+  if (screen === 'try-on' && selectedDress) return <TryOn dress={selectedDress} profile={profile} imageUrl={tryOnImageUrl} loading={tryOnLoading} error={tryOnError} saved={isDressSaved(selectedDress.id)} onSave={() => setSavedDresses((old) => isDressSaved(selectedDress.id) ? old.filter((item) => item.dress.id !== selectedDress.id) : [...old, { dress: selectedDress, imageUrl: tryOnImageUrl }])} onBack={back} onTryAnother={() => go('dresses')} onRetry={() => runTryOn(selectedDress)} />;
   if (screen === 'generating') return <Generating />;
 
   const screenContent: Record<string, ReactNode> = {
@@ -748,9 +698,9 @@ function Review({ profile, onEdit, onSave, onBack }: { profile: SkinTuneProfile;
     { label: 'Colours & moment', value: `Loves ${profile.colorsLove.join(', ')}${profile.colorsAvoid.length ? ` · avoids ${profile.colorsAvoid.join(', ')}` : ''} · ${profile.occasion}`, target: 'colors-occasion' },
     { label: 'Impression & budget', value: `${profile.impression.join(', ')} · ${profile.budget}`, target: 'final-prefs' },
   ];
-  return <StepShell profile={profile} onBack={onBack} step={11}><Intro eyebrow="11 / your edit, at a glance" title={`This sounds like ${profile.name}.`} body="Look it over, make any changes, then we'll make five complete looks around it.">
+  return <StepShell profile={profile} onBack={onBack} step={11}><Intro eyebrow="11 / your edit, at a glance" title={`This sounds like ${profile.name}.`} body="Look it over, make any changes, then we'll search real stores for pieces that match.">
     <div className="divide-y divide-border overflow-hidden rounded-[1.5rem] border border-border bg-card">{rows.map((row) => <div key={row.label} className="flex items-start justify-between gap-4 p-5"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[.13em] text-muted-foreground">{row.label}</p><p className="mt-1 line-clamp-2 text-sm leading-relaxed">{row.value}</p></div><button type="button" onClick={() => onEdit(row.target)} data-testid={`button-edit-${row.label.toLowerCase().replace(' ', '-')}`} className="focus-ring inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold text-primary hover:bg-secondary"><Pencil size={13} /> Edit</button></div>)}</div>
-    <FooterActions onBack={onBack} onContinue={onSave} label="✨ Make my five looks" />
+    <FooterActions onBack={onBack} onContinue={onSave} label="✨ Find my dresses" />
   </Intro></StepShell>;
 }
 

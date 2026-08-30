@@ -39,48 +39,32 @@ export type SkinTuneProfile = {
 /** Alias kept for continuity with a future backend contract. */
 export type UserProfile = SkinTuneProfile;
 
-export type LookPiece = {
-  category: string;
-  name: string;
-  detail: string;
-};
+// ---- real-dress-search branch ----
+//
+// LookPiece, LookRecommendation, LookFeedback, and GenerationResult (the
+// AI-generated-look contract with recommendation-engine.ts/
+// image-generation.ts) were removed here — this branch replaces that flow
+// entirely with real web-sourced dresses. See CLAUDE.md.
+//
+// Replaces the AI-generated-look flow: instead of GPT-4o inventing an
+// outfit description, the backend searches the real web (Tavily) for
+// actual purchasable dresses/outfits matching the profile. See
+// services/dress-search.ts and artifacts/api-server/src/routes/
+// search-dresses.ts.
 
-// A complete-look recommendation. This is the contract between the
-// recommendation engine and the image-generation service (see
-// services/recommendation-engine.ts and services/image-generation.ts) — it
-// carries enough structured styling data for an image provider to visualize
-// the look without inventing its own styling strategy.
-export type LookRecommendation = {
+export type DressResult = {
   id: string;
   title: string;
-  note: string;
-  category?: string;
-  /** A single distinct mood word (e.g. "Radiant", "Grounded") used to drive per-look pose/expression in image generation. */
-  vibe?: string;
-  /** 1-2 sentences of photographer-facing pose/energy direction for this specific look. */
-  personaEnergy?: string;
-  palette: string[];
-  pieces: LookPiece[];
-  outfit: string;
-  outfitColor: string;
-  jewellery: string;
-  hairstyle: string;
-  makeup: string;
-  accessories: string;
-  footwear: string;
-  reasoning: string[];
-  confidence: number;
   imageUrl: string;
+  siteName: string;
+  /** Where "Interested" sends the user — this photo's own source store domain, not necessarily the exact product page. */
+  sourceUrl: string;
 };
 
-export type LookFeedback = {
-  feeling: string;
-  changeRequest: string;
-  changeAreas: string[];
-  lookId?: string;
-};
-
-export type GenerationResult = {
-  recommendations: LookRecommendation[];
-  generatedAt: string;
+/** A general shopping link shown alongside the dress grid — a real store's page, not tied to any specific DressResult card. */
+export type ShopLink = {
+  title: string;
+  url: string;
+  siteName: string;
+  price?: string;
 };

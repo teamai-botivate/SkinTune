@@ -9,9 +9,17 @@ short, tap-driven wizard (appearance, body/fit, taste, colours, occasion,
 context, desired impression, budget) and gets 5 personalized complete-look
 recommendations (outfit, colour, jewellery, hairstyle, makeup, accessories).
 
-**Explicitly out of scope — do not add these:** wardrobe digitisation,
-wardrobe upload, real-time try-on, medical/diagnostic claims, beauty scoring.
-The product is about confidence and expression, not judgement.
+**Explicitly out of scope on `main` — do not add these:** wardrobe
+digitisation, wardrobe upload, real-time try-on, medical/diagnostic claims,
+beauty scoring. The product is about confidence and expression, not
+judgement.
+
+**The `real-dress-search` branch is a deliberate, explicit exception to
+"no real-time try-on"** — see "Real-dress-search branch" near the bottom of
+this file. That branch replaces the 5-AI-generated-look flow with real web-
+sourced dresses and a real try-on visualisation, per direct product
+direction. Wardrobe upload, medical/diagnostic claims, and beauty scoring
+remain out of scope even there.
 
 ## Repo layout (pnpm workspace monorepo)
 
@@ -667,7 +675,9 @@ Replit workflow. For a plain local dev run: `PORT=5173 BASE_PATH=/ pnpm
 
 ## Working conventions
 
-- Don't add wardrobe upload/try-on features — see "What this is" above.
+- Don't add wardrobe upload features. Don't add real-time try-on on `main`
+  — that exists intentionally only on the `real-dress-search` branch (see
+  "What this is" and the dedicated section near the bottom of this file).
 - Keep option vocabulary (labels, emojis) centralized in
   `src/data/options.ts`, not inline in `App.tsx`.
 - Keep the recommendation engine and image generation as two separate
@@ -678,3 +688,143 @@ Replit workflow. For a plain local dev run: `PORT=5173 BASE_PATH=/ pnpm
 - This repo has no test suite yet. Verify changes with `pnpm run typecheck`
   and the relevant `build` script at minimum before considering a change
   done.
+
+## `real-dress-search` branch — real web dresses + real try-on
+
+This branch replaces the entire AI-generated-look flow (recommendation
+engine inventing 5 outfit descriptions, then visualizing them) with real
+web search, per explicit product direction from the user: search the web
+for actual purchasable dresses matching the profile, let the user try on
+any one of them (real photo of them wearing it), and send them to the real
+store if they're interested. This is a genuine architectural fork from
+`main`, not an incremental feature — `main` is untouched and keeps the
+original AI-look product; do not merge this branch back without an
+explicit decision to replace the shipped product, since it removes a
+core, previously-shipped flow (5 AI-generated looks) entirely.
+
+**Non-negotiable product requirement, stated explicitly and repeatedly by
+the user: nothing about pose, expression, hairstyle, or environment may
+ever be hardcoded, templated, or keyword-matched.** Every one of those
+must be a fresh AI decision from the actual photo + actual garment + actual
+occasion, every time. This directly continues (and hardens) the same
+principle established on `main` in the image-generation pose/expression
+fix rounds — see the "Round 4" note above. The ONLY thing that is ever a
+fixed rule in this branch's prompts is identity preservation (same face);
+literally everything else about how the shot looks is left to the vision
+agent's judgement. When extending this feature, do not add a new
+if/switch/lookup-table deciding any visual/styling detail — add a field to
+the relevant agent's structured output schema instead and let the model
+decide it.
+
+### Real dress search (`POST /api/search-dresses`)
+
+`artifacts/api-server/src/lib/tavily-client.ts` wraps Tavily's `/search`
+endpoint (`TAVILY_API_KEY` env var). `artifacts/api-server/src/routes/
+search-dresses.ts` builds a query from the profile (gender inferred from
+`pronouns`, first `style`, first `colorsLove`, `occasion`, `budget` — every
+clause conditional, nothing hardcoded per-category or per-brand) and
+returns two separate lists:
+
+1. **`results` (`DressResult[]`)** — real product photos, built from
+   Tavily's `images[]`. Each card's `sourceUrl` is that same photo's own
+   image-host domain, normalized from common CDN hostnames to the real
+   retailer (`CDN_HOST_TO_RETAILER` table + a generic `images.`/`cdn.`/
+   `i<digit>.` prefix-stripping heuristic) — e.g. `i.etsystatic.com` ->
+   `etsy.com`. This is a real, always-present link, but NOT guaranteed to
+   be the exact product page (Tavily doesn't expose that association) —
+   documented explicitly in the route and confirmed by live testing.
+2. **`shopLinks` (`ShopLink[]`)** — general real store pages, built from
+   Tavily's `results[]`, each with a price when a `₹|Rs|$|€|£<digits>`
+   pattern was found in the page snippet. NOT tied to any specific dress
+   card above.
+
+**Why two separate lists instead of one paired "product" shape — this was
+tested and confirmed, not assumed:** a real query ("buy red wedding guest
+dress online") was run directly against Tavily and the `images[]` results
+(cicinia.com, etsy.com, walmart.com, next.co.uk) came from almost entirely
+different hostnames than the `results[]` pages (selfieleslie.com, asos.com,
+karenmillen.com, anthropologie.com) — hostname-matching the two arrays,
+which was the first approach tried, returned wrong/useless links (a CDN
+image's own root domain) for the vast majority of cards. The user was
+asked directly and chose the two-separate-lists design (Option B) over
+forcing a fragile pairing (Option A). Do not attempt to re-pair these two
+arrays by hostname or fuzzy title match without re-verifying against a
+live Tavily response first — this exact approach was tried and abandoned.
+
+**Pagination ("More dresses") is a fresh, slightly broadened search, not a
+cached-list slice.** `buildSearchQuery`'s `page` parameter nudges the query
+(adds the user's 2nd style/colour preference, or "more options") so a
+later page surfaces a different slice of the web rather than re-showing
+the same top results. Tavily has no native pagination for a single query.
+
+### Try-on (`POST /api/try-on`)
+
+`artifacts/api-server/src/routes/try-on.ts` — same `gpt-image-2` machinery
+as `generate-image.ts` (Responses API `image_generation` tool primary,
+`images.edit` fallback, same org-verification 403 caveat), but takes the
+picked `DressResult`'s own real product photo as a SECOND reference image
+alongside the user's own photo (mirrors `refine-image.ts`'s two-reference-
+image pattern), so the edit shows the person wearing that exact real
+garment rather than a text-described approximation.
+
+`writeTryOnAddendum` is this route's vision agent — same
+structured-JSON-output pattern as `generate-image.ts`'s
+`writeStylingAddendum` (see "Round 4" above for why structured fields over
+free prose): it looks at BOTH images together and decides `expression`,
+`headAndCameraAngle`, `bodyLanguage`, `environmentAndSetting`, and
+`fitNotes` fresh each time, reasoning about this specific person and this
+specific real garment together. `profile.pronouns`/`occasion` are passed
+only as context for tone, explicitly instructed never to be branched into
+a fixed set of phrases. If this call fails, `buildTryOnPrompt` only gets a
+single neutral placeholder sentence — never a hardcoded styling decision.
+
+### Frontend flow
+
+`src/services/dress-search.ts` (`searchDresses`, `tryOnDress`) is the
+service boundary — UI components never call Tavily/OpenAI directly. In
+`App.tsx`, the wizard's `review` step now leads into `generating` (which
+runs the first `searchDresses` call, ~10 results, then advances to
+`dresses`) instead of the old AI-look generation. `DressGrid` shows the
+photo grid (tap a card or "Try this on" to try it) plus the "Shop these
+online" `shopLinks` section beneath it, with a "More dresses" button when
+`hasMore`. `TryOn` shows the loading/result/error states for one dress,
+with "Interested — visit {site}" (linking to `dress.sourceUrl`, disabled
+until the image is ready) and "Not this one — try another" (back to the
+grid) as the two outcomes described in the original product ask. Saved
+items (`SavedDress = { dress, imageUrl }`) persist to the same
+`skintune-saved-looks` localStorage key as before, just with a different
+shape.
+
+**Removed on this branch** (confirmed orphaned — no remaining imports —
+before deletion): `src/services/recommendation-engine.ts`,
+`src/services/image-generation.ts`, the `LookRecommendation`/`LookPiece`/
+`LookFeedback`/`GenerationResult` types, the `Feedback` screen (its
+"How did this land?" flow had no remaining entry point once the AI-look
+retry path was gone), and `feedbackFeelingOptions`/`feedbackChangeOptions`/
+`lookCategoryBadges` from `options.ts`. The backend's `recommendations.ts`,
+`generate-image.ts`, and `refine-image.ts` routes were deliberately LEFT IN
+PLACE (per explicit decision, not an oversight) — they're unreachable from
+this branch's frontend but harmless, and keeping them means `main`'s flow
+can be restored quickly if ever needed without resurrecting deleted files.
+
+**Local dev needs `TAVILY_API_KEY`** in `artifacts/api-server/.env` (get
+one at app.tavily.com) alongside `OPENAI_API_KEY` — see `.env.example`.
+Without it, `/api/search-dresses` returns a clear 502; there is no mock
+fallback for dress search the way other routes fall back to static mock
+data, since there's no meaningful "mock real dress" to show.
+
+Verified live (this branch): ran real `/api/search-dresses` calls against
+the real Tavily API with both a women's ("red, elegant, wedding guest,
+mid-range") and a men's ("navy, classic, office, mid-range") profile —
+correctly gender- and context-appropriate real results both times (red
+wedding-guest dresses vs. navy suits), real prices on `shopLinks` (`$44.99`,
+`£30`, etc.), and correct, non-duplicated pagination on a second page
+(`offset: 10` returned 5 different dresses, ids 11-15, not a repeat of
+page one). Try-on itself was not live-verified end-to-end in this session
+(no `OPENAI_API_KEY` available in the dev environment at the time) — it
+reuses `generate-image.ts`'s already-verified edit machinery, but if
+try-on identity preservation or garment fidelity is ever reported as poor,
+verify it live the same way `generate-image.ts`'s fixes were verified
+(a real reference photo + a real dress image through the actual route)
+before assuming the reused machinery transfers perfectly to a two-real-
+photo input instead of one-real-photo-plus-text-description.

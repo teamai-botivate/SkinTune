@@ -174,3 +174,70 @@ export const AnalyzePhotoResponseSchema = z.object({
   contrast: z.string(),
 });
 export type AnalyzePhotoResponse = z.infer<typeof AnalyzePhotoResponseSchema>;
+
+// ---- /api/search-dresses (real-dress-search branch) ----
+//
+// Replaces the AI-generated-look recommendation step on this branch: instead
+// of GPT-4o inventing an outfit description, this route searches the real
+// web (via Tavily, see lib/tavily-client.ts) for actual purchasable dresses/
+// outfits matching the user's profile, and returns real product photos with
+// a price (when found), the store name, and a link to buy. See
+// routes/search-dresses.ts for how results are built and paginated.
+
+export const DressResultSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  imageUrl: z.string(),
+  siteName: z.string(),
+  // Where "Interested" sends the user — the store domain this photo's own
+  // image came from (normalized from its CDN hostname, e.g.
+  // i.etsystatic.com -> etsy.com), not necessarily the exact product page.
+  // See routes/search-dresses.ts's doc comment on why an exact per-image
+  // product page link isn't reliably available from this data source.
+  sourceUrl: z.string(),
+});
+export type DressResult = z.infer<typeof DressResultSchema>;
+
+// A general shopping link surfaced alongside the dress photo grid — a real
+// store's search/category page (not tied to any one specific dress card),
+// with a price when Tavily's page snippet happened to contain one.
+export const ShopLinkSchema = z.object({
+  title: z.string(),
+  url: z.string(),
+  siteName: z.string(),
+  price: z.string().optional(),
+});
+export type ShopLink = z.infer<typeof ShopLinkSchema>;
+
+export const SearchDressesRequestSchema = z.object({
+  profile: SkinTuneProfileSchema,
+  // Pagination for the "More" button — offset into the ranked result set,
+  // not a raw API page number, since Tavily itself doesn't paginate a
+  // single query; each "page" here is a fresh, slightly broadened search.
+  offset: z.number().int().min(0).default(0),
+  limit: z.number().int().min(1).max(20).default(10),
+});
+
+export const SearchDressesResponseSchema = z.object({
+  results: z.array(DressResultSchema),
+  shopLinks: z.array(ShopLinkSchema),
+  hasMore: z.boolean(),
+});
+
+// ---- /api/try-on (real-dress-search branch) ----
+//
+// Takes ONE real dress the user picked from /api/search-dresses plus their
+// own uploaded photo, and edits their photo to show them wearing that exact
+// dress — same gpt-image-2 edit machinery as generate-image.ts (Responses
+// API primary, images.edit fallback), just with the dress's real product
+// photo as a second reference image instead of a text description alone.
+
+export const TryOnRequestSchema = z.object({
+  dress: DressResultSchema,
+  profile: SkinTuneProfileSchema,
+  photoUrl: z.string().min(1), // required here — there is no "no photo" fallback for a real try-on
+});
+
+export const TryOnResponseSchema = z.object({
+  imageUrl: z.string(),
+});
