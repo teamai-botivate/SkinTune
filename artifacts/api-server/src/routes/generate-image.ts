@@ -83,29 +83,28 @@ function buildLookEditPrompt(
   look: LookRecommendation,
   profile: SkinTuneProfile,
   context: OccasionContext,
-  stylingAddendum?: string | null,
+  addendum: StylingAddendum | null,
 ): string {
   const parts = [
-    `This is a photo of a real specific person. Edit ONLY their clothing, hairstyle, makeup, and background — you must NOT change their face, facial structure, facial features, skin tone, or identity in any way. The exact same face from the input photo must appear in the output, just re-dressed.`,
+    `This is a photo of a real specific person. The ONLY thing that must never change is WHO this person is: their face, facial structure, facial features, and skin tone must stay recognizably this exact same person. Everything else — hairstyle, expression, pose, body language, clothing, makeup, background — is yours to change as much as needed to produce the best possible result. Preserving identity is not the same as preserving the original photo; you are re-styling this person for a new shoot, not lightly editing their selfie.`,
     // Anti "cut-paste face" instruction: the failure mode being guarded
     // against here is visibly distinct from ordinary identity drift — the
     // face reads as pasted onto a different pose/lighting/body rather than
     // photographed as one coherent scene. Naming it explicitly (not just
     // "keep the same face") gives the model something concrete to avoid.
     "The face must be seamlessly and naturally part of the new photo — matching the new lighting, angle, and skin tone rendering of the rest of the scene. It must never look like a face cut out and pasted onto a different body or pose; the neck, jaw, hairline, and shoulders must blend continuously into the body below with consistent lighting and perspective, as if this is one single photograph taken in one moment, not a composite.",
-    `Re-dress this exact person for a ${context.occasion || "everyday"} setting.`,
+    `Re-dress and re-style this exact person for a ${context.occasion || "everyday"} setting.`,
     // Pose/expression/environment: primarily decided by writeStylingAddendum()
     // below, which actually looks at this person's face and this specific
     // look's mood — a fixed rule-based template here previously produced
     // near-identical expressions across all 5 looks regardless of intent.
     // The fallback line only fires when that agent call failed or no photo
     // was provided (nothing for it to analyze).
-    stylingAddendum ? "" : buildFallbackPoseInstruction(context.occasion),
+    addendum ? "" : buildFallbackPoseInstruction(context.occasion),
     buildFlatteringInstruction(profile.pronouns),
     `New outfit: ${look.outfit}`,
     `Colour direction: ${look.outfitColor}`,
-    `Jewellery: ${look.jewellery}`,
-    `Hairstyle: ${look.hairstyle}`,
+    `New hairstyle: ${look.hairstyle}. This hairstyle MUST be visibly and clearly restyled to match this description — do not leave the hair looking like the input photo. A different look calls for a different hairstyle; rendering the same hair across every look is a failure. Changing hairstyle does NOT change who this person is, so restyle it with confidence.`,
     `Makeup: ${look.makeup}`,
     `Accessories: ${look.accessories}`,
     profile.bodyBuild ? `Preserve their natural build (${profile.bodyBuild}) — do not alter body shape.` : "",
@@ -115,9 +114,11 @@ function buildLookEditPrompt(
     // body language — see writeStylingAddendum()'s doc comment. Everything
     // else in this prompt is a constraint or a styling fact; this is the
     // one part that's actually decided by looking at the person.
-    stylingAddendum ? `Pose, expression, and styling direction for this specific person and this specific look (decided by analyzing their actual photo): ${stylingAddendum}` : "",
+    addendum
+      ? `Pose, expression, hairstyle rendering, and body language for this specific person and this specific look (decided by analyzing their actual photo, and deliberately different from this person's other looks in this same shoot): Facial expression: ${addendum.expression} Head and camera angle: ${addendum.headAndCameraAngle} Body language and pose: ${addendum.bodyLanguage} How the new hairstyle should actually render on this person's head/face shape: ${addendum.hairstyleRendering} ${addendum.fitNotes}`
+      : "",
     "Natural lighting, tasteful and supportive, no beauty filter, no visible text or watermark. Professional editorial photo quality, the kind of natural, well-composed photo you'd see in a stylish social-media outfit post — not a stiff studio ID photo.",
-    "Reminder: keep the same face and identity as the input photo, seamlessly integrated into the new scene (not pasted-looking), with an outfit that fits and suits their actual body correctly — this is a clothing, pose, and styling edit, not a new person and not a literal copy of the original snapshot's camera angle.",
+    "Reminder: keep the same face and identity as the input photo, seamlessly integrated into the new scene (not pasted-looking) — but hairstyle, expression, pose, and clothing must all change as directed above, confidently and visibly, to give the best possible styled result for this specific look. This is a full re-styling, not a light touch-up.",
   ];
   return parts.filter(Boolean).join(" ");
 }
@@ -131,24 +132,67 @@ function decodeDataUrl(dataUrl: string): { mime: string; buffer: Buffer } {
 }
 
 /**
+ * Structured output of writeStylingAddendum() — see its doc comment. Split
+ * into discrete fields (rather than one free-text paragraph) specifically
+ * to stop the 5 parallel per-look calls from converging on similarly-worded
+ * "confident, natural expression" prose: forcing the model to commit to a
+ * specific value per field (not just "a mood") produces more concretely
+ * different results, and lets buildLookEditPrompt() weight each aspect
+ * (hairstyle rendering in particular) as its own strong instruction instead
+ * of one clause buried in a paragraph.
+ */
+type StylingAddendum = {
+  expression: string;
+  headAndCameraAngle: string;
+  bodyLanguage: string;
+  hairstyleRendering: string;
+  fitNotes: string;
+};
+
+const STYLING_ADDENDUM_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    expression: { type: "string", description: "The specific facial expression for this shot — concrete, not generic (e.g. 'a bright open laugh, eyes crinkled' not 'confident expression')." },
+    headAndCameraAngle: { type: "string", description: "Camera height and head angle/tilt for this specific shot." },
+    bodyLanguage: { type: "string", description: "How the body, shoulders, hands, and weight are positioned — concrete and specific to this look's mood." },
+    hairstyleRendering: { type: "string", description: "How the new hairstyle should actually look on this person's real head/face shape, hair length, and texture as seen in the photo — must describe a hairstyle that is visibly different from what appears in the input photo, matching the look's requested hairstyle." },
+    fitNotes: { type: "string", description: "1-2 sentences on how the outfit should fit this person's actual visible proportions/build/shoulder width from the photo." },
+  },
+  required: ["expression", "headAndCameraAngle", "bodyLanguage", "hairstyleRendering", "fitNotes"],
+  additionalProperties: false,
+} as const;
+
+/**
  * Prompt-writing agent — the PRIMARY decision-maker for this look's pose,
- * facial expression, and body language. A GPT-4o vision call that actually
- * looks at the user's real photo (their real face shape, features,
- * apparent build, framing) plus the look's styling data, and decides what
- * pose and expression would genuinely look natural and flattering ON THIS
- * SPECIFIC FACE for this specific look — not a lookup from a fixed set of
- * mood keywords. An earlier version of this prompt asked for "a pose
- * distinct to this look's mood" as one bullet among several fit-related
- * ones, and results kept coming out with near-identical expressions across
- * all 5 looks; the fix is asking the model to genuinely study the face
- * (its natural resting expression, features, apparent personality cues)
- * and reason about what suits THAT face and THIS look's occasion, framed
- * the way a real photographer or social-media stylist would approach a
- * shoot — not filling in a template slot.
+ * facial expression, hairstyle rendering, and body language. A GPT-4o
+ * vision call that actually looks at the user's real photo (their real face
+ * shape, features, apparent build, framing) plus the look's styling data,
+ * and decides what pose, expression, and hairstyle rendering would
+ * genuinely look natural and flattering ON THIS SPECIFIC FACE for this
+ * specific look — not a lookup from a fixed set of mood keywords.
  *
- * Also writes fit/rendering detail (apparent proportions, shoulder width,
- * framing, visible build, hair length/texture) that a static text template
- * can't know without seeing the photo.
+ * History of this function (do not regress to earlier approaches — both
+ * were tried and failed in production):
+ * 1. A keyword-matched template picking a pose "family" from the look's
+ *    title/category text — too generic, expressions barely changed.
+ * 2. This function as free-form prose (3-5 sentences) — an improvement,
+ *    but real production batches still came back with near-identical
+ *    expressions/poses across all 5 looks AND near-identical, barely-changed
+ *    hairstyles across different users entirely. Two causes: (a) the 5
+ *    parallel per-look calls have no visibility into each other, so they
+ *    independently converge on the same "safe" photographer-cliché answer
+ *    regardless of vibe; (b) free prose gives the model room to write
+ *    something plausible-sounding without committing to a genuinely
+ *    different value, and hairstyle specifically kept losing to the
+ *    identity-preservation instructions in the final edit prompt.
+ * 3. Current fix (this version): structured JSON output with discrete
+ *    required fields (forces commitment to specific values instead of
+ *    vague prose), explicit sibling-look vibe awareness (told what the
+ *    OTHER looks in this batch already used, and instructed to actively
+ *    avoid repeating them), and an explicit, forceful hairstyle-rendering
+ *    field paired with a matching forceful instruction in
+ *    buildLookEditPrompt() that clarifies changing hairstyle does NOT
+ *    violate identity preservation.
  *
  * Deliberately does NOT get to decide identity/fit POLICY — the mandatory
  * rules (keep the same face, fit the outfit to the person's actual build,
@@ -165,7 +209,8 @@ async function writeStylingAddendum(
   profile: SkinTuneProfile,
   context: OccasionContext,
   photoUrl: string,
-): Promise<string | null> {
+  siblingVibes: string[],
+): Promise<StylingAddendum | null> {
   try {
     const completion = await openai.chat.completions.create({
       model: RECOMMENDATION_MODEL,
@@ -173,25 +218,35 @@ async function writeStylingAddendum(
         {
           role: "system",
           content:
-            "You are a fashion photographer and social-media stylist directing a photo edit — the kind of natural, well-composed \"outfit change\" edit popular on Instagram/Reels, where the same real person appears in a new outfit but the photo still looks like a genuine, spontaneously captured moment, never a stiff studio ID photo and never a face that looks pasted onto a different pose. You are shown a real person's actual photo and a complete-look recommendation for them. Your job is to genuinely study THIS person's face — their natural resting expression, face shape, features, and the vibe they already give off in the photo — and decide, like a photographer directing a real shoot, exactly what pose, facial expression, and body language would look most natural and flattering on THIS specific face for THIS specific look and occasion. Do not pick from a generic list of moods; reason about this actual face and this actual look together. Vary this meaningfully from what you'd choose for a different look on the same person — a look described as playful/casual calls for something different from one described as elegant/formal, but the expression must still feel like something this person's own face would naturally do, not a borrowed expression. Also write 1-2 sentences of fit/rendering detail you can only know from the photo (apparent proportions, shoulder width, framing, visible build, hair length/texture) to help the outfit and hairstyle render correctly on this build. Do not repeat generic instructions like 'keep the same face' or 'avoid a pasted look' — those are handled separately. Do not invent a different outfit, colour, or accessory than the one described. Never comment on attractiveness, body flaws, or anything that could read as a judgment — this is purely practical photography/styling direction. Write 3-5 short, concrete sentences total. Output only the sentences, no preamble, no markdown.",
+            "You are a fashion photographer and social-media stylist directing a photo edit — the kind of natural, well-composed \"outfit change\" edit popular on Instagram/Reels, where the same real person appears in a new outfit but the photo still looks like a genuine, spontaneously captured moment, never a stiff studio ID photo and never a face that looks pasted onto a different pose. You are shown a real person's actual photo and a complete-look recommendation for them. Your job is to genuinely study THIS person's face — their natural resting expression, face shape, features, and the vibe they already give off in the photo — and decide, like a photographer directing a real shoot, exactly what facial expression, head/camera angle, body language, and hairstyle rendering would look most natural and flattering on THIS specific face for THIS specific look and occasion. Do not pick from a generic list of moods; reason about this actual face and this actual look together, and commit to specific, concrete choices rather than safe generic ones — 'a bright open laugh with eyes crinkled' is useful, 'a confident expression' is not. The ONLY thing that must stay the same as the input photo is who this person is (face/identity) — hairstyle, expression, and pose are all expected and encouraged to change as much as suits the look; changing hair does not break identity. If you're told what expressions/vibes other looks in this same shoot already used, you MUST pick something genuinely different from all of them — repeating a similar expression across looks is a failure. Never comment on attractiveness, body flaws, or anything that could read as a judgment — this is purely practical photography/styling direction. Output must be valid JSON matching the given schema exactly.",
         },
         {
           role: "user",
           content: [
             {
               type: "text",
-              text: `Look to render on this person: "${look.title}" — ${look.note} Outfit "${look.outfit}" (${look.outfitColor}), jewellery "${look.jewellery}", hairstyle "${look.hairstyle}", makeup "${look.makeup}", accessories "${look.accessories}". Why this look was chosen: ${look.reasoning.join(" ")}${look.vibe ? ` This look's intended vibe: "${look.vibe}".` : ""}${look.personaEnergy ? ` Photographer's energy brief for this look: ${look.personaEnergy}` : ""} Occasion: ${context.occasion || "everyday"}. Person's stated build: ${profile.bodyBuild || "not specified"}, fit preference: ${profile.fit || "not specified"}. Study their actual face in the photo and direct the pose and expression for this exact shoot, honoring the vibe/energy brief above but translated onto this specific real face — do not just restate the brief, show how it looks on THIS person.`,
+              text: `Look to render on this person: "${look.title}" — ${look.note} Outfit "${look.outfit}" (${look.outfitColor}), jewellery "${look.jewellery}", hairstyle "${look.hairstyle}", makeup "${look.makeup}", accessories "${look.accessories}". Why this look was chosen: ${look.reasoning.join(" ")}${look.vibe ? ` This look's intended vibe: "${look.vibe}".` : ""}${look.personaEnergy ? ` Photographer's energy brief for this look: ${look.personaEnergy}` : ""} Occasion: ${context.occasion || "everyday"}. Person's stated build: ${profile.bodyBuild || "not specified"}, fit preference: ${profile.fit || "not specified"}.${siblingVibes.length ? ` This person is getting ${siblingVibes.length + 1} looks generated in this same shoot. The OTHER looks' vibes are: ${siblingVibes.join(", ")}. Your expression, pose, and body language for THIS look must be clearly and obviously different from all of those — do not converge on a similar "safe" default.` : ""} Study their actual face in the photo and direct this exact shoot, honoring the vibe/energy brief above but translated onto this specific real face — do not just restate the brief, show how it looks on THIS person, and describe exactly how the new hairstyle ("${look.hairstyle}") should render on their actual head shape and hair as seen in the photo.`,
             },
             { type: "image_url", image_url: { url: photoUrl } },
           ],
         },
       ],
-      temperature: 0.8,
-      max_tokens: 250,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "styling_addendum",
+          strict: true,
+          schema: STYLING_ADDENDUM_JSON_SCHEMA,
+        },
+      },
+      temperature: 0.9,
+      max_tokens: 400,
     });
-    const text = completion.choices[0]?.message?.content?.trim();
-    if (text) logger.debug({ lookId: look.id, stylingAddendum: text }, "Styling addendum generated");
-    return text || null;
+    const raw = completion.choices[0]?.message?.content?.trim();
+    if (!raw) return null;
+    const addendum = JSON.parse(raw) as StylingAddendum;
+    logger.debug({ lookId: look.id, stylingAddendum: addendum }, "Styling addendum generated");
+    return addendum;
   } catch (err) {
     logger.warn({ err, lookId: look.id }, "Styling addendum agent failed; continuing without it");
     return null;
@@ -296,7 +351,7 @@ router.post("/generate-image", async (req, res) => {
     return;
   }
 
-  const { look, profile, context, photoUrl } = parsed.data;
+  const { look, profile, context, photoUrl, siblingVibes } = parsed.data;
 
   try {
     const openai = getOpenAIClient();
@@ -304,7 +359,7 @@ router.post("/generate-image", async (req, res) => {
     // it only runs when one was provided — see writeStylingAddendum()'s doc
     // comment for what it does and doesn't control.
     const stylingAddendum = photoUrl
-      ? await writeStylingAddendum(openai, look, profile, context, photoUrl)
+      ? await writeStylingAddendum(openai, look, profile, context, photoUrl, siblingVibes ?? [])
       : null;
     const prompt = buildLookEditPrompt(look, profile, context, stylingAddendum);
 

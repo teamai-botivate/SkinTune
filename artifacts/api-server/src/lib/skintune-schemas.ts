@@ -109,6 +109,16 @@ export const GenerateImageRequestSchema = z.object({
   // skipped the photo step, the route falls back to text-to-image
   // generation instead of an edit.
   photoUrl: z.string().optional(),
+  // The OTHER 4 looks' vibe words in this same batch (see
+  // LookRecommendationSchema.vibe), sent so the per-look styling-addendum
+  // agent (writeStylingAddendum in generate-image.ts) can actively steer
+  // away from expressions/poses it's already "used" elsewhere in this
+  // batch, instead of each of the 5 parallel per-look requests
+  // independently converging on the same generic "confident portrait"
+  // answer with no visibility into its siblings. Optional/best-effort —
+  // omitted entirely for older frontend builds or if a caller doesn't have
+  // the full batch (e.g. a future single-look regeneration).
+  siblingVibes: z.array(z.string()).optional(),
 });
 
 export const GenerateImageResponseSchema = z.object({

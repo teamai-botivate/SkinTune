@@ -340,6 +340,65 @@ again, check the actual `vibe`/`personaEnergy` values in a real
 `/api/recommendations` response FIRST — this has now been the root cause
 twice, both times upstream of the image-generation code itself.
 
+**Round 3: with vibe/personaEnergy correctly distinct upstream, production
+still showed near-identical expressions across all 5 looks AND — a new,
+worse symptom — near-identical hairstyles across DIFFERENT USERS
+entirely**, reported directly by the user with screenshots of 5 generated
+looks that all had the same short side-swept haircut and the same
+closed-mouth, direct-camera expression regardless of look mood (formal
+office blazer, gold party shirt, casual grey hoodie, etc. all looked the
+same face-and-hair-wise). Two separate root causes, found by re-reading
+`generate-image.ts` rather than re-tweaking the recommendation engine
+again (which was already confirmed correct in round 2):
+
+1. **Hairstyle**: `buildLookEditPrompt`'s only hairstyle instruction was a
+   single flat line (`Hairstyle: ${look.hairstyle}`) sitting in a long
+   paragraph dominated by a strongly-worded identity-preservation
+   instruction ("do NOT change their face... skin tone... identity in any
+   way"). Image-editing models bias conservative near a strict
+   identity-lock instruction — hairstyle got swept into "don't change
+   this" by association, even though only face/identity was meant to be
+   protected. Different users converging on similar hair (not just one
+   user's 5 looks looking alike) is the signature of the model defaulting
+   to "leave it as in the input photo" as the path of least resistance.
+2. **Expression**: `writeStylingAddendum` (the vision agent that decides
+   pose/expression) was free-form prose with no visibility into the other
+   4 looks being generated in the same batch — each of the 5 parallel
+   per-look HTTP requests independently asked the same model roughly the
+   same question ("what expression suits this look on this face") and
+   converged on similar-sounding "confident, natural" photographer clichés
+   despite genuinely distinct vibe/personaEnergy input.
+
+Fix (both together, `generate-image.ts` + `skintune-schemas.ts` +
+`image-generation.ts`):
+- `writeStylingAddendum` now returns **structured JSON** (`StylingAddendum`:
+  `expression`, `headAndCameraAngle`, `bodyLanguage`, `hairstyleRendering`,
+  `fitNotes`) via strict `response_format` instead of free prose — forcing
+  the model to commit to a specific value per field rather than writing
+  plausible-sounding but vague text. `temperature` raised 0.8 → 0.9.
+- The frontend now sends `siblingVibes` — the OTHER 4 looks' `vibe` words
+  in the same batch (`image-generation.ts`'s `generateLookImages`, new
+  `siblingVibes` field on `GenerateImageRequestSchema`, optional/best-effort)
+  — so each per-look call is explicitly told what's already "used" in this
+  shoot and instructed to pick something clearly different, breaking the
+  blind-convergence problem instead of hoping temperature alone fixes it.
+- `buildLookEditPrompt` was rewritten to explicitly state that identity
+  preservation means ONLY "who this person is" (face/skin tone) —
+  hairstyle, expression, pose, and clothing are explicitly called out as
+  free to change "as much as needed for the best result", per direct user
+  clarification. The hairstyle line is now a dedicated forceful instruction
+  ("This hairstyle MUST be visibly and clearly restyled... rendering the
+  same hair across every look is a failure") separate from and no longer
+  competing with the identity-lock instruction, plus the addendum's
+  `hairstyleRendering` field describes exactly how the new style should sit
+  on this person's real head/hair as seen in the photo.
+- Do not resurrect free-prose addendum output or a sibling-blind per-look
+  call — both were tried and both under-delivered in production. If
+  repetition is ever reported again, check with real generated images
+  first (not just the `/api/recommendations` text output, which was
+  already confirmed correct in round 2) — this round's bug was entirely in
+  `generate-image.ts`, downstream of already-correct recommendation data.
+
 **Image quality is intentionally set to the high end of the cost/latency
 tradeoff.** All three call sites (`editViaResponsesApi`,
 `editViaImagesEdit`, and the no-photo `images.generate` fallback) use

@@ -37,12 +37,19 @@ const generateOneLookImage = async (
   profileForRequest: Omit<SkinTuneProfile, 'photoUrl'>,
   context: OccasionContext,
   photoUrl: string,
+  siblingVibes: string[],
 ): Promise<LookRecommendation> => {
   try {
     const res = await fetch('/api/generate-image', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ look, profile: profileForRequest, context, photoUrl: photoUrl || undefined }),
+      body: JSON.stringify({
+        look,
+        profile: profileForRequest,
+        context,
+        photoUrl: photoUrl || undefined,
+        siblingVibes: siblingVibes.length ? siblingVibes : undefined,
+      }),
     });
     if (!res.ok) throw new Error(`Image generation request failed: ${res.status}`);
     const data = (await res.json()) as { look: LookRecommendation };
@@ -72,7 +79,17 @@ export const generateLookImages = async (
 ): Promise<LookRecommendation[]> => {
   const { photoUrl, ...profileForRequest } = profile;
   return Promise.all(
-    recommendations.map((look) => generateOneLookImage(look, profileForRequest, context, photoUrl)),
+    recommendations.map((look) => {
+      // Every OTHER look's vibe word in this batch, so the backend's
+      // per-look styling agent can deliberately avoid repeating an
+      // expression/pose already "claimed" elsewhere in the same 5 — see
+      // GenerateImageRequestSchema.siblingVibes.
+      const siblingVibes = recommendations
+        .filter((other) => other.id !== look.id)
+        .map((other) => other.vibe)
+        .filter((vibe): vibe is string => Boolean(vibe));
+      return generateOneLookImage(look, profileForRequest, context, photoUrl, siblingVibes);
+    }),
   );
 };
 
