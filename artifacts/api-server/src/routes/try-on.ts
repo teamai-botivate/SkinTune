@@ -196,14 +196,40 @@ function buildTryOnPrompt(dress: DressResult, profile: SkinTuneProfile, addendum
     "Frame this as a full-length shot showing the complete outfit from head to shoes — the whole garment, including any bottoms and footwear, must be visible in the frame. Do not crop to a waist-up or close-up portrait; the point of this photo is to show the full look.",
     "Dress this exact person in the exact garment shown in the second reference image — match its actual cut, colour, pattern, and details faithfully, not a generic approximation.",
     "The garment must fit this exact person's actual body correctly: drape, sit, and follow their REAL proportions and build (not a slimmer or idealized version) as if properly worn, not pasted on or floating away from the body.",
+    // Each addendum field used to be folded into one long clause (all five
+    // of expression/angle/body-language/setting/fit crammed into a single
+    // sentence), with only hairstyle singled out as its own forceful,
+    // individually-stated MUST instruction. Confirmed live via the (now
+    // fixed) addendum log: the agent itself was already deciding good,
+    // specific values for every field — e.g. a real logged
+    // hairstyleRendering of "neater voluminous side-swept quiff... top
+    // kept full but shaped" — but the final image-generation model still
+    // under-delivered on hair specifically, the one field buried in a
+    // shared sentence with four others rather than stated as its own
+    // requirement. Every field below is now its own separate, explicit
+    // MUST-style instruction, matching the treatment hairstyle already had
+    // — a shared sentence structure was very likely diluting how strongly
+    // the model weighted each individual instruction, not just hairstyle's.
+    addendum
+      ? `Facial expression for this shot — this is a specific, deliberate creative decision, not optional flavour text: ${addendum.expression} The output's expression MUST match this description, not the input photo's expression.`
+      : "",
+    addendum
+      ? `Head position and camera angle for this shot: ${addendum.headAndCameraAngle} The output MUST be composed at this angle, not a plain reproduction of the input photo's angle.`
+      : "",
+    addendum
+      ? `Body language and pose for this shot: ${addendum.bodyLanguage} The output MUST show this exact body language and pose.`
+      : "",
+    addendum
+      ? `Background and setting for this shot: ${addendum.environmentAndSetting} The output MUST be set in this environment, not a generic or different backdrop.`
+      : "",
     addendum
       ? `New hairstyle rendering for this shot: ${addendum.hairstyleRendering} This hair MUST be visibly restyled to match that description if it calls for a change from the input photo — do not simply leave the hair exactly as it appears in the original photo. Changing hairstyle does NOT change who this person is, so restyle it with confidence.`
       : "",
     addendum
-      ? `Pose, expression, and setting for this shot (decided by studying this exact person and this exact garment together, and deliberately different from a plain reproduction of the input photo's own pose/expression): Facial expression: ${addendum.expression} Head and camera angle: ${addendum.headAndCameraAngle} Body language and pose: ${addendum.bodyLanguage} Background/setting: ${addendum.environmentAndSetting} Fit: ${addendum.fitNotes}`
+      ? `Fit notes for how the garment sits on this person: ${addendum.fitNotes}`
       : "Compose this as one natural, well-lit, coherent photograph with a pose, expression, and setting genuinely different from the input photo's own — a new shoot, not a copy of the original.",
     "Natural lighting, tasteful and supportive, no beauty filter, no visible text or watermark. Professional editorial photo quality, the kind of natural, well-composed photo you'd see in a stylish social-media outfit post — not a stiff studio ID photo, and not a barely-modified copy of the input selfie.",
-    "Final reminder, the most important rule in this entire prompt: the output face AND body build must be unmistakably the SAME PERSON as the first reference photo — same face shape, same features, same facial hair, same skin tone, same body build and proportions (not slimmer, not more toned, not idealized). Look at the first reference photo again before finishing and check the output genuinely matches it. Seamlessly integrated into the new scene (not pasted-looking), full-length framing with the complete outfit visible — but hairstyle, expression, pose, and background must all change as directed above, confidently and visibly, to give the best possible result showing this exact garment on this exact person. This is a full re-styling for a new photograph, not a light touch-up of the original.",
+    "Final reminder, the most important rules in this entire prompt: (1) the output face AND body build must be unmistakably the SAME PERSON as the first reference photo — same face shape, same features, same facial hair, same skin tone, same body build and proportions (not slimmer, not more toned, not idealized); (2) EVERY styling instruction given above — expression, head/camera angle, body language, background/setting, and especially hairstyle — must be followed as stated, not softened, not defaulted back toward the input photo, and not treated as optional. Look at the first reference photo again before finishing and check the output genuinely matches it on identity, and check the styling instructions above were genuinely followed, not just approximated. Seamlessly integrated into the new scene (not pasted-looking), full-length framing with the complete outfit visible. This is a full re-styling for a new photograph, not a light touch-up of the original.",
   ];
   return parts.filter(Boolean).join(" ");
 }

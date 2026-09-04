@@ -1298,3 +1298,43 @@ empty-content warnings still appear after raising the budget to 1200,
 raise it further before writing a seventh round of prompt-wording
 changes on top of a request that may still not be reaching the model's
 real output at all.
+
+**Round 7: with Round 6's fix live, the addendum log finally showed real
+content — confirming the agent itself was making good decisions all
+along** (a real logged example: `hairstyleRendering: "neater voluminous
+side-swept quiff... top kept full but shaped so the waves look
+intentional..."`, a genuinely specific, well-reasoned styling choice).
+But the generated image still under-delivered specifically on hairstyle —
+it came out visibly shorter/tighter than the agent's own instruction
+called for, even though expression, pose, and build now matched well.
+This finally isolated the remaining gap to exactly one place: the final
+image-generation model was under-weighting the hairstyle instruction
+specifically, not the addendum agent failing to decide one.
+
+Root cause found by re-reading `buildTryOnPrompt`: `expression`,
+`headAndCameraAngle`, `bodyLanguage`, `environmentAndSetting`, and
+`fitNotes` were all crammed into ONE shared sentence ("Pose, expression,
+and setting for this shot..."), while `hairstyleRendering` was already
+the only field with its own separate, individually-stated, MUST-worded
+instruction. The user's explicit direction here: this isn't a
+hairstyle-only problem, every field deserves the same forceful treatment
+hairstyle already had, since a shared-sentence structure was diluting how
+strongly the model weighted each individual instruction, not just hair's.
+
+Fix: every addendum field now gets its own separate sentence with an
+explicit "MUST match/show/be set in this description, not the input
+photo's own" instruction, mirroring hairstyle's existing treatment
+exactly. The closing reminder was also restructured into two explicitly
+numbered rules: (1) identity/build preservation (unchanged from Round 3),
+(2) a new, explicit instruction that EVERY styling instruction above must
+be followed as stated, not softened or defaulted back toward the input
+photo — naming hairstyle specifically as an example alongside the other
+fields, since that's the one with a directly observed under-delivery.
+
+Not independently live-verified with a real photo in this session — if
+any individual field (hairstyle or otherwise) is still under-delivered
+after this fix, check the addendum log first (now reliably visible per
+Round 6) to confirm the agent's decision was actually good, then inspect
+whether that specific field's now-individual instruction in
+`buildTryOnPrompt` needs to be even more forceful, rather than assuming
+the agent needs another prompt change.
