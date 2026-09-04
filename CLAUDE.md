@@ -1575,3 +1575,59 @@ whether its domain is already in `NEVER_RETAILER_DOMAINS` — if it's a
 new platform not yet on the list, add it there rather than trying to
 patch the text-relevance filter, which structurally can't catch this
 class of problem.
+
+### `search-dresses.ts`: accessories (glasses, jewellery) slipping into a garments-only search
+
+Reported live by a second real test user: searching for an outfit
+returned glasses/spectacles and a pendant/jewellery listing alongside
+genuine dresses. This product's dress search is explicitly garments-only
+— jewellery, eyewear, watches, bags, and standalone footwear are a
+different category and must never appear here, even though they're worn
+on the body and can share the same colour/occasion keywords a real outfit
+query uses (e.g. "gold wedding pendant" matches "wedding" + a colour the
+same way a real dress listing would). Root cause: `isRelevantToProfile`'s
+`nonClothingCategories` denylist only ever covered home-decor/gift
+categories (pottery, candles, bouquets, etc.) from earlier rounds —
+accessories were never on it, since nothing had surfaced this specific
+gap until this report. A pure denylist approach is inherently incomplete
+this way: each round only ever closes the specific category that was just
+reported, not the general "not clothing" case.
+
+Fix, three independent layers (matching this file's established pattern
+of not relying on any single filter alone):
+1. `nonClothingCategories` gained explicit accessory terms — eyewear/
+   eyeglasses/spectacles/sunglasses/reading glasses, pendant/necklace/
+   earring/bracelet/bangle/anklet/nose pin/jewellery set, wristwatch,
+   handbag/clutch bag, footwear-only — checked the same way as the
+   existing home-decor terms, against both title and content text.
+2. `buildSearchQuery` now asks for `"... clothing outfit ..."` (not just
+   `"outfit"`) and appends `-jewellery -jewelry -pendant -necklace
+   -earrings -eyewear -glasses -sunglasses -watch -handbag` — Tavily's
+   free-text query supports simple `-term` exclusion the way a normal web
+   search engine does, so this nudges the search itself away from the
+   accessories category before any result-level filtering even runs.
+3. `filterByImageContent`'s vision-check prompt (already checking for
+   couple photos / wrong-gender clothing from earlier rounds — see above)
+   now explicitly also flags any image whose main subject is an accessory
+   rather than a garment, even if it came from an otherwise clothing-
+   related query. This is the backstop for a listing whose title/
+   description doesn't literally contain any of layer 1's blocked words
+   (e.g. just a product name + colour) but whose photo unmistakably shows
+   only an accessory — the same class of "only visible in the image
+   itself" gap that motivated adding this vision check in the first
+   place (see the couple-photo case above). The prompt's tie-breaking
+   rule was also flipped for this category specifically: when in doubt
+   about garment-vs-accessory, reject rather than keep, since showing a
+   non-clothing item as if it were an outfit result is a worse failure
+   for this product than losing one borderline candidate.
+
+Not independently live-verified in this session (no `TAVILY_API_KEY`/
+`OPENAI_API_KEY` available) — typecheck and build both pass. If
+accessories still slip through after this ships, check which of the three
+layers should have caught the specific item (a title/content match should
+have been caught by layer 1; anything only visible in the photo is layer
+3's job) before adding a fourth mechanism — and if it's layer 3, check
+whether `filterByImageContent`'s `max_completion_tokens: 1500` budget is
+being exhausted the same way it already was once before (see the
+`finish_reason: "length"` root cause documented earlier in this file)
+rather than assuming the prompt wording itself needs another rewrite.
