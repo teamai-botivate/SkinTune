@@ -1089,3 +1089,46 @@ fix, verify with a real photo through the actual `/api/try-on` route
 before assuming the strengthened wording was sufficient; full-length
 framing is a genuinely harder identity-preservation problem than a
 waist-up crop would be, and this fix is a mitigation, not a guarantee.
+
+**Follow-up, after re-deploying the fix above: real-world result was
+better (build/skin tone/general face reasonably close) but the user
+directly reported, comparing side by side, that hairstyle, face shape,
+and BODY BUILD still didn't match** — the output looked noticeably
+slimmer/more athletic than the person's actual selfie, on top of the
+face-shape/hairstyle drift. Root cause, found by comparing directly
+against `generate-image.ts`'s already-working prompt: `generate-image.ts`
+has always had an explicit line (`Preserve their natural build
+(${profile.bodyBuild}) — do not alter body shape.`) directly in its edit
+prompt. `try-on.ts` never had an equivalent — `profile.bodyBuild` was
+only ever handed to `writeTryOnAddendum()` as loose context text, never
+turned into an explicit instruction in the actual image-generation prompt
+sent to the model. With nothing telling the model to preserve build, it
+defaulted to a generic slim/athletic "fit model" body for the outfit shot.
+
+Fix: `buildTryOnPrompt()` now takes `profile` directly (not just `dress`
+and the addendum) and includes an explicit build-preservation instruction
+mirroring `generate-image.ts`'s, stated even more forcefully given this is
+now the third round of identity-drift fixes on this route: "do not slim
+them down, do not make them more athletic or toned than they actually
+appear... The garment should be shown fitting THIS person's real build,
+not a slimmer or more idealized version of them." Also added an explicit
+"do not slim, narrow, or otherwise idealize the face shape" line next to
+the face-feature list (round 2's fix listed features to preserve but
+didn't explicitly forbid idealizing/slimming the face shape itself), and
+the closing reminder now checks build alongside face before finishing.
+
+**This route has now needed three separate identity-preservation
+fix rounds** (org-verification model swap was unrelated; the three real
+prompt-content rounds are: round 1 = general identity/cut-paste framing
+when the route was first written, round 2 = full-length framing +
+itemized face features, round 3 = this body-build instruction). The
+pattern across rounds 2 and 3 is the same: `try-on.ts` was written fresh
+for this branch and did not inherit protections that already existed in
+`generate-image.ts` from its own multi-round history on `main`. **Before
+trusting any single fix on this route as complete, do a line-by-line diff
+against `generate-image.ts`'s `buildLookEditPrompt`/`writeStylingAddendum`
+for any other instruction that exists there but not here** — that
+comparison is what found both round 2 and round 3's root causes, and is
+more reliable than guessing at new wording. This was NOT independently
+live-verified with a real photo in this session — if build still drifts
+after this fix, verify live before writing a fourth round from scratch.
