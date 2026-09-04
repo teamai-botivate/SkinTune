@@ -194,6 +194,15 @@ function buildTryOnPrompt(dress: DressResult, profile: SkinTuneProfile, addendum
     // more identity-drift risk than a tighter crop would, which is why the
     // face-feature instructions above are unusually explicit to compensate.
     "Frame this as a full-length shot showing the complete outfit from head to shoes — the whole garment, including any bottoms and footwear, must be visible in the frame. Do not crop to a waist-up or close-up portrait; the point of this photo is to show the full look.",
+    // Real, live-reported issue: the person's own reference photo is
+    // typically a close-up selfie, and when that gets converted to a
+    // full-length shot, the model can carry over the close-up's head
+    // size relative to the frame — resulting in a head/face that looks
+    // too large for the body once the rest of the person is visible. The
+    // face's actual FEATURES must transfer (see the itemized list above),
+    // but its SIZE in this new composition must scale down naturally to
+    // match a real full-length photograph, not stay selfie-sized.
+    "The head and face must be sized correctly and naturally for a full-length photograph — proportional to the rest of the body the way a real full-body photo actually looks, not enlarged or close-up-sized the way it would appear cropped tightly in a selfie. Get the head-to-body size ratio right for someone standing at a normal distance from the camera.",
     "Dress this exact person in the exact garment shown in the second reference image — match its actual cut, colour, pattern, and details faithfully, not a generic approximation.",
     // A real, live-reported failure mode this addresses directly: a
     // generated try-on came back with the person's own face but the exact

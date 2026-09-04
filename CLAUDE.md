@@ -1512,3 +1512,23 @@ setting again after this, that's a different, more specific symptom than
 copying the SELFIE's pose (already fixed in Round 4) — don't assume
 Round 4's fix covers this; verify against this round's specific
 instruction wording instead.
+
+**Round 9: the same generated result from Round 8 also had a head/face
+that looked too large relative to the body** — reported live alongside
+the pose-copy issue. Root cause: the reference selfie is typically a
+close-up, and nothing in the prompt told the model to re-scale the head
+size down when composing a full-length shot, so the close-up's head-to-
+frame proportion carried over even after the pose/setting issue was
+otherwise fixed. This is a distinct instruction from face-feature
+preservation (Round 2, which is about which features transfer, not what
+size they render at) and from body-build preservation (Round 3, torso/
+limb proportions, not head size specifically) — none of the existing
+instructions covered head-to-body SIZE ratio.
+
+Fix: added a dedicated instruction directly after the full-length-framing
+line: the head and face must be sized proportionally for a full-length
+photograph — "the way a real full-body photo actually looks, not
+enlarged or close-up-sized the way it would appear cropped tightly in a
+selfie... Get the head-to-body size ratio right for someone standing at a
+normal distance from the camera." Not independently live-verified with a
+real photo in this session.
