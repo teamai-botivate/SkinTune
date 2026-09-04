@@ -246,12 +246,30 @@ async function writeStylingAddendum(
       // same param; gpt-5.5 only supports the default value.
       // max_completion_tokens, not max_tokens — see analyze-photo.ts's
       // comment on the same param; gpt-5.5 rejects the older name.
-      max_completion_tokens: 500,
+      //
+      // Raised from 500 to 1200 — this was a confirmed real bug on
+      // try-on.ts's equivalent call (writeTryOnAddendum): gpt-5.5's
+      // internal reasoning tokens appear to count against this same
+      // budget, so a low limit risked the visible completion coming back
+      // empty with NO log at all (the `if (!raw) return null` below used
+      // to fail completely silently). Applying the same fix here
+      // preventatively even though this exact route wasn't the one where
+      // the empty-response symptom was directly observed.
+      max_completion_tokens: 1200,
     });
     const raw = completion.choices[0]?.message?.content?.trim();
-    if (!raw) return null;
+    if (!raw) {
+      // Previously silent — see the identical fix and full explanation on
+      // try-on.ts's writeStylingAddendum for why this now logs instead of
+      // returning null with no trace at all.
+      logger.warn(
+        { lookId: look.id, finishReason: completion.choices[0]?.finish_reason },
+        "Styling addendum agent returned empty content; continuing without it",
+      );
+      return null;
+    }
     const addendum = JSON.parse(raw) as StylingAddendum;
-    logger.debug({ lookId: look.id, stylingAddendum: addendum }, "Styling addendum generated");
+    logger.info({ lookId: look.id, stylingAddendum: addendum }, "Styling addendum generated");
     return addendum;
   } catch (err) {
     logger.warn({ err, lookId: look.id }, "Styling addendum agent failed; continuing without it");

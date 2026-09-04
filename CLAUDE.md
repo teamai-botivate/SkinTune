@@ -1230,3 +1230,71 @@ photo's hair as-is, and to state a specific choice rather than a vague
 "well-groomed hair." If hairstyle mismatch is reported again after this,
 check the now-visible `info`-level "Try-on addendum generated" log first
 to see what the agent is actually deciding before writing a sixth round.
+
+**Round 6 — the actual root cause of Rounds 4 and 5's symptoms, found by
+finally getting the addendum log to appear:** Round 5's `logger.debug` ->
+`logger.info` change was deployed, but real production requests STILL
+showed zero "Try-on addendum generated" log entries across multiple
+try-on calls, even though every request still returned 200 OK. This
+ruled out a Render log-viewer filtering issue (the prior working theory)
+and pointed at the function itself. Re-reading `writeStylingAddendum`'s
+own code line by line found the actual bug: `const raw =
+completion.choices[0]?.message?.content?.trim(); if (!raw) return null;`
+— if the model call returned no content, the function returned `null`
+with **zero logging on that path** — not `logger.info`'s success case,
+not `logger.warn`'s catch-block case, because no exception was thrown at
+all. This is exactly why no log ever appeared: the function wasn't
+crashing or being skipped, it was silently returning nothing.
+
+**Why the model was returning empty content: `gpt-5.5` is a
+reasoning-model-family model (already evidenced by its temperature-
+override rejection, documented above), and its internal reasoning tokens
+are believed to count against the same `max_completion_tokens` budget as
+the visible output.** `try-on.ts`'s `writeTryOnAddendum` was asking for a
+6-field strict JSON schema (this route's largest of the three call sites
+using this pattern) with only `max_completion_tokens: 400` — plausible
+that reasoning alone consumed the entire budget, leaving nothing for the
+actual JSON output, producing a genuinely empty completion. This
+directly explains BOTH Round 4's and Round 5's symptoms: with the
+addendum silently `null`, `buildTryOnPrompt` fell all the way back to
+its bare last-resort line (`buildMinimalPoseFallback`-equivalent) instead
+of any of the real, carefully-worded identity/hairstyle/expression
+instructions those rounds added — meaning rounds 4 and 5's actual prompt
+improvements may never have been exercised at all in the specific
+requests that were reported as still-broken. The "cut-paste" look and
+face-size mismatch reported after Round 5 are consistent with this: with
+no addendum, the model had no directed pose/framing guidance and fell
+back to whatever default composition choice it made on its own.
+
+Fix, three parts:
+1. The silent `if (!raw) return null` path in `writeTryOnAddendum` (and
+   the identical pattern in `generate-image.ts`'s `writeStylingAddendum`,
+   fixed preventatively even though it wasn't the one directly observed
+   failing) now logs a `logger.warn` with the completion's `finish_reason`
+   before returning null, so this failure mode can never be invisible
+   again.
+2. `max_completion_tokens` raised across all three structured-output call
+   sites that use this pattern: `try-on.ts` 400 -> 1200 (this route's
+   confirmed-affected call, given the largest headroom since it has the
+   most schema fields), `generate-image.ts` 500 -> 1200 (preventative,
+   same reasoning-token risk), `analyze-photo.ts` 300 -> 800 (preventative
+   — this one already logged its failures via `logger.error` since it
+   `throw`s on empty content rather than returning null, so it was never
+   silently invisible, but still carried the same underlying token-budget
+   risk).
+3. `generate-image.ts`'s addendum log was also raised from `debug` to
+   `info`, matching `try-on.ts`'s Round 5 fix, for the same Render-log-
+   visibility reasoning.
+
+**This is the most likely true root cause of the multi-round
+identity/hairstyle/expression struggle on `try-on.ts`** — rounds 2-5 may
+have been iterating on prompt wording for a code path that was frequently
+not even running, because the addendum agent was frequently returning
+empty and failing completely silently. Verify live after this fix with a
+real photo through `/api/try-on`, and specifically check for either a
+"Try-on addendum generated" (success) or "Try-on addendum agent returned
+empty content" (still failing, now at least visible) log entry — if
+empty-content warnings still appear after raising the budget to 1200,
+raise it further before writing a seventh round of prompt-wording
+changes on top of a request that may still not be reaching the model's
+real output at all.

@@ -89,7 +89,13 @@ router.post("/analyze-photo", async (req, res) => {
       // rejects the older max_tokens param with a 400 ("Unsupported
       // parameter"). Do not revert to max_tokens without re-verifying
       // against whatever model is configured at the time.
-      max_completion_tokens: 300,
+      // Raised from 300 to 800 — see try-on.ts's writeStylingAddendum for
+      // the confirmed root cause this budget size is guarding against:
+      // gpt-5.5 is a reasoning-model-family model whose internal reasoning
+      // tokens appear to count against this same budget, so a low limit
+      // risks the visible completion coming back empty even though the
+      // call itself succeeds.
+      max_completion_tokens: 800,
     });
 
     const raw = completion.choices[0]?.message?.content;

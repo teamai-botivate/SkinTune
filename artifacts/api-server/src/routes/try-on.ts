@@ -91,10 +91,43 @@ async function writeTryOnAddendum(
       // same param; gpt-5.5 only supports the default value.
       // max_completion_tokens, not max_tokens — see analyze-photo.ts's
       // comment on the same param; gpt-5.5 rejects the older name.
-      max_completion_tokens: 400,
+      //
+      // Raised from 400 to 1200: this was a real, confirmed root cause of
+      // a silent failure — gpt-5.5 is a reasoning-model-family model (see
+      // the temperature-rejection note above, a related symptom of the
+      // same family), and reasoning tokens are believed to count against
+      // this same budget alongside the visible completion. With a 6-field
+      // strict JSON schema to fill (this route's largest schema of the
+      // three that make this same call), 400 tokens was apparently
+      // consumed entirely by internal reasoning before any visible content
+      // could be emitted, producing a genuinely empty completion — which
+      // (before the fix at the `if (!raw)` check above) failed completely
+      // silently, with no log at all, making this very hard to diagnose.
+      // If addendum generation is ever reported as unreliable again after
+      // this, check for the new "Try-on addendum agent returned empty
+      // content" warning log first, and consider raising this further
+      // before assuming the prompt itself is at fault.
+      max_completion_tokens: 1200,
     });
     const raw = completion.choices[0]?.message?.content?.trim();
-    if (!raw) return null;
+    if (!raw) {
+      // This was a real, previously-silent failure path: if the model
+      // returns no content (e.g. hit a refusal, or the strict schema
+      // response was empty for any reason), this used to just return null
+      // with NO log at all — neither logger.info's success path nor
+      // logger.warn's catch-block path ever ran, making it look from the
+      // logs like this function was never even called. Confirmed live:
+      // production requests completed successfully (200 OK) with zero
+      // "Try-on addendum generated" entries anywhere in the logs, across
+      // multiple real try-on requests after this route's model was
+      // already switched to gpt-5.5 — this silent-empty-content path is
+      // the explanation. Log it now so this is never invisible again.
+      logger.warn(
+        { dressId: dress.id, finishReason: completion.choices[0]?.finish_reason },
+        "Try-on addendum agent returned empty content; continuing without it",
+      );
+      return null;
+    }
     const addendum = JSON.parse(raw) as TryOnAddendum;
     // Logged at `info` (not `debug`) deliberately: this is the ONLY place
     // the actual styling decision for a try-on is visible, and depending
