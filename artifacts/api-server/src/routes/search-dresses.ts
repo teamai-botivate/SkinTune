@@ -7,6 +7,7 @@ import {
   type SkinTuneProfile,
 } from "../lib/skintune-schemas";
 import { tavilySearch, type TavilyImage, type TavilyResult } from "../lib/tavily-client";
+import { getOpenAIClient, RECOMMENDATION_MODEL } from "../lib/openai-client";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -221,6 +222,15 @@ function isRelevantToProfile(title: string, content: string | undefined, profile
     "cup set",
     "dinnerware",
     "kitchenware",
+    // Added after a live report: "artificial flowers"/bouquet listings
+    // (wedding decor, not clothing) matched a colour+occasion query
+    // ("terracotta wedding") and slipped through as a dress card.
+    "artificial flower",
+    "bouquet",
+    "boutonniere",
+    "floral arrangement",
+    "wedding decor",
+    "wedding décor",
   ];
   if (nonClothingCategories.some((term) => text.includes(term))) return false;
 
@@ -258,6 +268,82 @@ function buildShopLinks(results: TavilyResult[], profile: SkinTuneProfile, limit
     });
   }
   return links;
+}
+
+/**
+ * Text-only filtering (isRelevantToProfile above) catches mismatches
+ * visible in the title/description text, but a real, live-reported case
+ * slipped through it: a card titled "Buy Men's Rust Brown 2 Piece Suit"
+ * whose actual photo showed a bride-and-groom couple together, not the
+ * suit alone — the mismatch was only visible in the IMAGE ITSELF, not
+ * anything Tavily's text metadata said. Text filtering structurally can't
+ * catch this class of problem.
+ *
+ * This does one batched GPT-5.5 vision call across ALL candidate images
+ * for a page at once (not one call per image — that would multiply
+ * latency and cost by the number of candidates) and asks it to flag which
+ * ones are NOT a clean single-person shot of clothing matching the
+ * profile's stated gender (e.g. a couple/group photo, or a photo of the
+ * wrong gender's clothing that the text metadata didn't reveal). Runs
+ * AFTER text filtering and de-duplication, on the final candidate list,
+ * so it's checking a small, already-mostly-relevant set, not every raw
+ * search result. If this call fails for any reason, it fails open (all
+ * candidates kept) rather than blocking the whole search — a missed
+ * visual mismatch is a lesser problem than the search failing outright.
+ */
+async function filterByImageContent(
+  dresses: DressResult[],
+  profile: SkinTuneProfile,
+): Promise<DressResult[]> {
+  if (dresses.length === 0) return dresses;
+  try {
+    const openai = getOpenAIClient();
+    const completion = await openai.chat.completions.create({
+      model: RECOMMENDATION_MODEL,
+      messages: [
+        {
+          role: "system",
+          content:
+            `You are reviewing a set of product photos being shown to a person styling themselves for ${profile.pronouns || "an unspecified gender"}. For EACH numbered image, decide if it is a clean, usable product shot for THIS person: it should show clothing/an outfit matching their stated gender, ideally worn by a single person (or a flat/product-only shot), NOT a couple or group photo, NOT the wrong gender's clothing, and NOT an unrelated object. Respond with strict JSON: {"rejectedIndexes": [array of 0-based indexes to reject]}. Only reject images with a genuine, clear mismatch — when in doubt, keep the image (a false rejection loses a possibly-good result; a false keep is a minor quality issue).`,
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: `Review these ${dresses.length} images (numbered 0 to ${dresses.length - 1} in order). Titles for context: ${dresses.map((d, i) => `${i}: "${d.title}"`).join("; ")}` },
+            ...dresses.map((d) => ({ type: "image_url" as const, image_url: { url: d.imageUrl } })),
+          ],
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "image_relevance_check",
+          strict: true,
+          schema: {
+            type: "object",
+            properties: { rejectedIndexes: { type: "array", items: { type: "integer" } } },
+            required: ["rejectedIndexes"],
+            additionalProperties: false,
+          },
+        },
+      },
+      max_completion_tokens: 500,
+    });
+    const raw = completion.choices[0]?.message?.content?.trim();
+    if (!raw) {
+      logger.warn({ finishReason: completion.choices[0]?.finish_reason }, "Image relevance check returned empty content; keeping all candidates");
+      return dresses;
+    }
+    const { rejectedIndexes } = JSON.parse(raw) as { rejectedIndexes: number[] };
+    const rejectedSet = new Set(rejectedIndexes);
+    if (rejectedSet.size > 0) {
+      logger.info({ rejected: dresses.filter((_, i) => rejectedSet.has(i)).map((d) => d.title) }, "Image relevance check rejected mismatched dress photos");
+    }
+    return dresses.filter((_, i) => !rejectedSet.has(i));
+  } catch (err) {
+    logger.warn({ err }, "Image relevance check failed; keeping all candidates");
+    return dresses;
+  }
 }
 
 /** Interleaves several arrays round-robin (a,b,c, a,b,c, ...) instead of concatenating them, so the merged list alternates sites/colours instead of running all of one site's cards before the next. */
@@ -312,15 +398,25 @@ router.post("/search-dresses", async (req, res) => {
     // combinations) instead of running all of one task's cards before the
     // next, de-duplicate by image URL (different tasks can surface the
     // same photo, especially when several fall back to the same
-    // well-indexed site), then re-number ids sequentially.
+    // well-indexed site). Collect a few more than `limit` here (candidate
+    // buffer) since the image-content check below can reject some of
+    // them — without the buffer, every rejection would just shrink the
+    // final page instead of being backfilled.
     const seenImageUrls = new Set<string>();
-    const merged: DressResult[] = [];
+    const candidates: DressResult[] = [];
+    const candidateBuffer = limit + 6;
     for (const dress of interleave(perTaskCards)) {
-      if (merged.length >= limit) break;
+      if (candidates.length >= candidateBuffer) break;
       if (seenImageUrls.has(dress.imageUrl)) continue;
       seenImageUrls.add(dress.imageUrl);
-      merged.push(dress);
+      candidates.push(dress);
     }
+    // See filterByImageContent's doc comment: text filtering can't catch a
+    // mismatch that's only visible in the photo itself (e.g. a title
+    // saying "men's suit" whose actual photo shows a bride and groom
+    // together) — this is a live-reported real bug, not speculative.
+    const visuallyChecked = await filterByImageContent(candidates, profile);
+    const merged = visuallyChecked.slice(0, limit);
     const dresses: DressResult[] = merged.map((dress, i) => ({ ...dress, id: `dress-${offset + i + 1}` }));
     const shopLinks = buildShopLinks(allResults, profile, 8);
 

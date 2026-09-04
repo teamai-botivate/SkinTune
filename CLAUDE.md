@@ -1373,3 +1373,41 @@ went from including a bridal-lehenga guide and a pottery-gifts listing to
 wedding-suit category page); a women's profile's results were checked
 afterward too and came back unaffected (no genuine dresses/gowns were
 incorrectly filtered out), confirming the filter isn't over-aggressive.
+
+**Follow-up: two more real cases reported live with a screenshot, both
+after the text-filter fix above shipped.** (1) An "artificial flowers/
+bouquet" wedding-decor listing (`Ling's Moment Artificial Flowers
+Terracotta...`) — a real product category the original
+`nonClothingCategories` list didn't include; added
+"artificial flower"/"bouquet"/"boutonniere"/"floral arrangement"/
+"wedding decor" to that list. (2) A card titled "Buy Men's Rust Brown 2
+Piece Suit" whose actual product photo showed a bride and groom together,
+not the suit alone — text filtering structurally cannot catch this, since
+nothing in the title or description signalled the mismatch; it's only
+visible in the image itself.
+
+Fix for (2): `filterByImageContent` does ONE batched GPT-5.5 vision call
+across all of a page's candidate dress images at once (not one call per
+image, which would multiply latency/cost by candidate count), asking the
+model to flag any that are a couple/group photo, the wrong gender's
+clothing, or otherwise not a clean single-person product shot matching
+the profile. Runs after text filtering and de-duplication, on the small
+already-mostly-relevant candidate set, not on every raw search result.
+The route now collects `limit + 6` candidates (not just `limit`) before
+this check runs, so rejections have headroom to be backfilled instead of
+just shrinking the page. **Fails open by design**: if the vision call
+errors or returns empty content for any reason, all candidates are kept
+and a warning is logged — a missed visual mismatch is a much smaller
+problem than the whole search failing, so this must never turn a
+one-step failure into a broken page. Verified live (Tavily-only, no
+OpenAI key available in this session): with no `OPENAI_API_KEY`
+configured, `filterByImageContent` correctly logged "Image relevance
+check failed; keeping all candidates" and the search still returned a
+full page of results — confirming the fail-open path works, though the
+actual vision-based rejection behavior itself (does it correctly catch a
+real couple photo) was NOT independently live-verified in this session
+due to no OpenAI key being available. If a couple/group/wrong-gender
+photo is ever reported again after this ships, check the
+"Image relevance check rejected mismatched dress photos" info log first
+to see whether the check ran and what it rejected, before assuming the
+vision call itself needs a different prompt.
