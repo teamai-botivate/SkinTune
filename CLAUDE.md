@@ -837,6 +837,37 @@ silent-failure gap. Any future call added to this screen's loading effect
 must have an explicit `.catch()` — a bare `.then()` on a screen with no
 other feedback mechanism reads as the app being stuck, not as an error.
 
+**Follow-up per direct user request: a generic error message wasn't
+enough — the search flow needed a genuinely interactive, step-by-step log,
+both in the console and on screen, so it's clear exactly how far a request
+got and where it failed.** `src/lib/activity-log.ts`'s `createActivityLog`
+is a small real (not cosmetic) step tracker: each step transitions
+`pending` -> `active` -> `done`/`error`, every transition is
+console-logged with a timestamp (`[SkinTune HH:MM:SS.mmm] ✓/✗/… label`),
+and the same state renders as `App.tsx`'s `StepChecklist` on the
+`Generating` screen. The steps are real request boundaries, not a fixed
+timer: "Searching real stores" starts when the `fetch` to
+`/api/search-dresses` goes out and finishes when a response arrives;
+"Building your results" wraps the response's `.json()` parse. "Reading
+your profile" is the one synthetic step (marked done immediately — there's
+no separate network call for it) purely so the checklist doesn't open on
+an empty first row.
+
+**Error messages are now the server's actual message, not a generic
+retry-later string.** `dress-search.ts`'s `readErrorMessage` reads the
+backend's `{error, message}` JSON body (every route already returns this
+shape on failure) and surfaces `message` specifically — e.g. a real Tavily
+401 comes through as `"Dress search request failed: 401 — Tavily search
+failed: 401 {...Unauthorized: missing or invalid API key...}"`, not a vague
+"couldn't reach real stores." Verified live in this session: pointed the
+route at a deliberately invalid `TAVILY_API_KEY` and confirmed the exact
+Tavily 401 body flows all the way through to what would render in the UI.
+`runTryOn` and the "More dresses" handler in `App.tsx` got the same
+treatment — every failure path in this branch now surfaces the real
+server-side error text via `console.error` and on-screen, not a canned
+message. When adding a new request in this flow, thread the real error
+message through the same way rather than writing a new generic string.
+
 Verified live (this branch): ran real `/api/search-dresses` calls against
 the real Tavily API with both a women's ("red, elegant, wedding guest,
 mid-range") and a men's ("navy, classic, office, mid-range") profile —

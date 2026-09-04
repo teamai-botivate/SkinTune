@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { searchDresses, tryOnDress } from './services/dress-search';
 import { analyzePhoto } from './services/photo-analysis';
+import { createActivityLog, type LogStep } from './lib/activity-log';
 import { photoAnalysisStages, photoDiagnostics } from './data/photo-diagnostics';
 import {
   ageGroupOptions, bodyBuildOptions, budgetOptions, colorAvoidOptions, colorLoveOptions,
@@ -447,33 +448,38 @@ function DressVisual({ dress, large = false }: { dress: DressResult; large?: boo
   </div>;
 }
 
-// Stages the "Generating" screen cycles through while the first page of
-// real dresses is being searched. A real web search plus building the
-// shopping-links section can take a few real seconds, so this deliberately
-// keeps cycling/animating for as long as the screen is mounted rather than
-// finishing early and sitting static — see the interval logic below.
-const generatingStages = [
-  'Reading the room',
-  'Searching real stores',
-  'Matching your palette',
-  'Finding pieces that fit your build',
-  'Checking what’s actually in stock',
-  'Lining up your top picks',
-];
+// The real steps a dress search actually goes through — driven by genuine
+// progress events from services/dress-search.ts (via lib/activity-log.ts),
+// not a cosmetic timer. "Reading your profile" is the one synthetic step
+// (marked done immediately, since there's no separate network call for
+// it) so the checklist doesn't open on an empty first row; every other
+// step's status reflects a real request boundary, and a failed step shows
+// its own real error message rather than a generic one.
+const SEARCH_STEPS = ['Reading your profile', 'Searching real stores', 'Building your results'];
 
-function Generating({ error, onRetry, onBack }: { error: string; onRetry: () => void; onBack: () => void }) {
-  const [active, setActive] = useState(0);
+function StepChecklist({ steps }: { steps: LogStep[] }) {
+  return <div className="mt-16 max-w-md space-y-3" data-testid="list-generating-steps">
+    {steps.map((step) => <div key={step.label} className="flex items-start gap-3">
+      <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full">
+        {step.status === 'done' && <CheckCircle2 size={20} className="text-accent" />}
+        {step.status === 'error' && <X size={20} className="text-destructive" />}
+        {step.status === 'active' && <span className="relative grid size-5 place-items-center"><span className="absolute inset-0 animate-ping rounded-full bg-primary/40" /><span className="relative grid size-5 place-items-center rounded-full bg-primary"><RefreshCw size={11} className="animate-spin text-primary-foreground" /></span></span>}
+        {step.status === 'pending' && <span className="size-2.5 rounded-full bg-border" />}
+      </span>
+      <div className="min-w-0">
+        <p className={`text-sm font-semibold ${step.status === 'pending' ? 'text-muted-foreground' : 'text-foreground'}`}>{step.label}</p>
+        {step.status === 'error' && step.detail && <p className="mt-0.5 text-xs text-destructive">{step.detail}</p>}
+      </div>
+    </div>)}
+  </div>;
+}
+
+function Generating({ steps, error, onRetry, onBack }: { steps: LogStep[]; error: string; onRetry: () => void; onBack: () => void }) {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   useEffect(() => {
     if (error) return;
-    // Cycles through the stage list on repeat (not once-and-stop) so the
-    // screen stays visibly active for the full real search time — previously
-    // the stages finished in a few seconds and then sat frozen for the rest
-    // of the wait, which read as stuck. Stops advancing once an error is
-    // shown instead — a spinning stage list behind an error reads as broken.
-    const stageTimer = window.setInterval(() => setActive((value) => (value + 1) % generatingStages.length), 2600);
     const clockTimer = window.setInterval(() => setElapsedSeconds((value) => value + 1), 1000);
-    return () => { window.clearInterval(stageTimer); window.clearInterval(clockTimer); };
+    return () => window.clearInterval(clockTimer);
   }, [error]);
   const minutes = Math.floor(elapsedSeconds / 60);
   const seconds = elapsedSeconds % 60;
@@ -481,25 +487,14 @@ function Generating({ error, onRetry, onBack }: { error: string; onRetry: () => 
     <div className="mb-14 flex items-center gap-2"><span className="grid size-10 place-items-center rounded-[14px] bg-primary text-primary-foreground"><Sparkles size={19} className="animate-pulse" /></span><span className="font-serif text-2xl">SkinTune</span></div>
     <p className="text-xs font-bold uppercase tracking-[.24em] text-primary">Your personal edit</p>
     <h1 className="mt-5 max-w-xl font-serif text-[clamp(3rem,8vw,6.5rem)] leading-[.88] tracking-[-.05em]">Making room<br />for your <em className="text-primary">point of view.</em></h1>
-    {error ? <div className="mt-16 max-w-md animate-rise" data-testid="text-generating-error">
+    <StepChecklist steps={steps} />
+    {error ? <div className="mt-6 max-w-md animate-rise" data-testid="text-generating-error">
       <p className="text-sm font-semibold text-destructive">{error}</p>
       <div className="mt-4 flex flex-wrap gap-3">
         <button type="button" onClick={onRetry} data-testid="button-retry-search" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-bold text-primary-foreground"><RefreshCw size={15} /> Try again</button>
         <button type="button" onClick={onBack} data-testid="button-generating-back" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold hover:border-primary/50">Back</button>
       </div>
-    </div> : <>
-      <div className="mt-16 flex max-w-md items-center gap-4" data-testid="text-generating-stage">
-        <span className="relative grid size-9 shrink-0 place-items-center">
-          <span className="absolute inset-0 animate-ping rounded-full bg-primary/40" />
-          <span className="relative grid size-9 place-items-center rounded-full bg-primary text-primary-foreground"><RefreshCw size={16} className="animate-spin" /></span>
-        </span>
-        <span key={active} className="animate-rise text-lg font-semibold">{generatingStages[active]}…</span>
-      </div>
-      <div className="mt-6 h-1.5 max-w-md overflow-hidden rounded-full bg-secondary">
-        <div className="h-full w-1/3 animate-[indeterminate_1.6s_ease-in-out_infinite] rounded-full bg-primary" />
-      </div>
-      <p className="mt-8 flex items-center gap-2 text-xs text-muted-foreground"><Clock3 size={14} /> {elapsedSeconds < 5 ? 'Getting started…' : `${minutes > 0 ? `${minutes}m ` : ''}${seconds}s so far — searching real stores takes a moment.`}</p>
-    </>}
+    </div> : <p className="mt-6 flex items-center gap-2 text-xs text-muted-foreground"><Clock3 size={14} /> {elapsedSeconds < 3 ? 'Getting started…' : `${minutes > 0 ? `${minutes}m ` : ''}${seconds}s so far — check the browser console for full detail.`}</p>}
   </div></div>;
 }
 
@@ -620,6 +615,7 @@ function SkinTune() {
   const [tryOnError, setTryOnError] = useState('');
   const [searchError, setSearchError] = useState('');
   const [searchAttempt, setSearchAttempt] = useState(0);
+  const [searchSteps, setSearchSteps] = useState<LogStep[]>(() => SEARCH_STEPS.map((label) => ({ label, status: 'pending' })));
   const [loadMoreError, setLoadMoreError] = useState('');
 
   const update = (patch: Partial<SkinTuneProfile>) => setProfile((old) => ({ ...old, ...patch }));
@@ -635,9 +631,14 @@ function SkinTune() {
     setTryOnError('');
     setTryOnLoading(true);
     go('try-on');
+    console.log(`[SkinTune] Starting try-on: "${dress.title}" from ${dress.siteName}`);
     tryOnDress(dress, profile)
-      .then((imageUrl) => setTryOnImageUrl(imageUrl))
-      .catch((err) => { setTryOnError('That try-on didn’t go through. Please try again.'); console.warn('Try-on failed:', err); })
+      .then((imageUrl) => { console.log('[SkinTune] Try-on complete.'); setTryOnImageUrl(imageUrl); })
+      .catch((err) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        console.error('[SkinTune] Try-on failed:', detail);
+        setTryOnError(detail);
+      })
       .finally(() => setTryOnLoading(false));
   };
 
@@ -645,9 +646,15 @@ function SkinTune() {
     if (screen !== 'generating') return;
     let active = true;
     setSearchError('');
-    searchDresses(profile, 0, DRESS_PAGE_SIZE)
+    setSearchSteps(SEARCH_STEPS.map((label) => ({ label, status: 'pending' })));
+    const log = createActivityLog(SEARCH_STEPS, (steps) => { if (active) setSearchSteps(steps); });
+    console.log('[SkinTune] Starting dress search for profile:', profile.occasion || '(no occasion)', profile.style);
+    log.start('Reading your profile');
+    log.done('Reading your profile'); // synthetic — no separate network call, just marks the checklist's first row complete immediately
+    searchDresses(profile, 0, DRESS_PAGE_SIZE, log)
       .then((page) => {
         if (!active) return;
+        console.log(`[SkinTune] Search complete: ${page.results.length} dresses, ${page.shopLinks.length} shop links, hasMore=${page.hasMore}`);
         setDresses(page.results);
         setShopLinks(page.shopLinks);
         setHasMoreDresses(page.hasMore);
@@ -655,8 +662,9 @@ function SkinTune() {
       })
       .catch((err) => {
         if (!active) return;
-        console.warn('Dress search failed:', err);
-        setSearchError('We couldn’t reach real stores just now. This is usually temporary — please try again in a moment.');
+        const detail = err instanceof Error ? err.message : String(err);
+        console.error('[SkinTune] Dress search failed:', detail);
+        setSearchError(detail);
       });
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: search begins once per entry into this screen (searchAttempt bumps to retry)
@@ -675,11 +683,11 @@ function SkinTune() {
     setLoadMoreError('');
     searchDresses(profile, dresses.length, DRESS_PAGE_SIZE)
       .then((page) => { setDresses((old) => [...old, ...page.results]); setHasMoreDresses(page.hasMore); })
-      .catch((err) => { console.warn('Load more dresses failed:', err); setLoadMoreError('Couldn’t load more just now — please try again.'); })
+      .catch((err) => { const detail = err instanceof Error ? err.message : String(err); console.error('[SkinTune] Load more dresses failed:', detail); setLoadMoreError(detail); })
       .finally(() => setLoadingMoreDresses(false));
   }} onBack={() => go('home')} />;
   if (screen === 'try-on' && selectedDress) return <TryOn dress={selectedDress} profile={profile} imageUrl={tryOnImageUrl} loading={tryOnLoading} error={tryOnError} saved={isDressSaved(selectedDress.id)} onSave={() => setSavedDresses((old) => isDressSaved(selectedDress.id) ? old.filter((item) => item.dress.id !== selectedDress.id) : [...old, { dress: selectedDress, imageUrl: tryOnImageUrl }])} onBack={back} onTryAnother={() => go('dresses')} onRetry={() => runTryOn(selectedDress)} />;
-  if (screen === 'generating') return <Generating error={searchError} onRetry={() => setSearchAttempt((v) => v + 1)} onBack={() => go(profile.name ? 'home' : 'welcome')} />;
+  if (screen === 'generating') return <Generating steps={searchSteps} error={searchError} onRetry={() => setSearchAttempt((v) => v + 1)} onBack={() => go(profile.name ? 'home' : 'welcome')} />;
 
   const screenContent: Record<string, ReactNode> = {
     name: <NameStep profile={profile} update={update} onNext={() => go('profile')} onBack={back} />,
