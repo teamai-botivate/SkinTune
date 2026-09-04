@@ -98,6 +98,46 @@ function hostnameOf(url: string): string | null {
 }
 
 /**
+ * Domains that are never a genuine shopping retailer, even though Tavily
+ * can return images hosted on them — confirmed live: a search scoped
+ * (via include_domains, which is only ever a ranking hint, not an
+ * enforced filter — see tavily-client.ts) to a real shopping site still
+ * returned an image hosted on lookaside.fbsbx.com (a Facebook CDN URL)
+ * whose actual content was an unrelated biography snippet with no
+ * connection to clothing at all. Text-based relevance filtering
+ * (isRelevantToProfile) can't catch this class of problem, since the
+ * image's title/description may not contain any of the off-topic
+ * category keywords it checks for — the issue here is the SOURCE domain
+ * itself, not the content matching a known-bad category. This is a
+ * denylist of platforms that host arbitrary user/business content, not
+ * dedicated storefronts, so nothing they serve should ever become a dress
+ * card regardless of what the image title claims.
+ */
+const NEVER_RETAILER_DOMAINS = [
+  "fbsbx.com",
+  "facebook.com",
+  "fbcdn.net",
+  "instagram.com",
+  "cdninstagram.com",
+  "pinterest.com",
+  "pinimg.com",
+  "twitter.com",
+  "x.com",
+  "twimg.com",
+  "tiktok.com",
+  "youtube.com",
+  "ytimg.com",
+  "wikipedia.org",
+  "wikimedia.org",
+  "linkedin.com",
+];
+
+/** True if this domain (or a subdomain of it) is one of NEVER_RETAILER_DOMAINS. */
+function isNeverRetailerDomain(domain: string): boolean {
+  return NEVER_RETAILER_DOMAINS.some((blocked) => domain === blocked || domain.endsWith(`.${blocked}`));
+}
+
+/**
  * Well-known image-CDN hostname patterns mapped to the actual retailer
  * domain they serve. Tavily's images[] frequently come from a store's asset
  * CDN (e.g. i.etsystatic.com, i5.walmartimages.com) rather than the store's
@@ -174,8 +214,9 @@ function buildDressCards(images: TavilyImage[], profile: SkinTuneProfile, limit:
     if (cards.length >= limit) break;
     const host = hostnameOf(image.url);
     if (!host) continue;
-    if (image.title && !isRelevantToProfile(image.title, image.description, profile)) continue;
     const domain = retailerDomainOf(host);
+    if (isNeverRetailerDomain(domain) || isNeverRetailerDomain(host)) continue;
+    if (image.title && !isRelevantToProfile(image.title, image.description, profile)) continue;
     cards.push({
       id: `dress-${idOffset + cards.length + 1}`,
       title: image.title || "Styled piece",
@@ -258,6 +299,7 @@ function buildShopLinks(results: TavilyResult[], profile: SkinTuneProfile, limit
     if (links.length >= limit) break;
     const host = hostnameOf(result.url);
     if (!host || seenHosts.has(host)) continue;
+    if (isNeverRetailerDomain(host)) continue;
     if (!isRelevantToProfile(result.title, result.content, profile)) continue;
     seenHosts.add(host);
     links.push({

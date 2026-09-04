@@ -1532,3 +1532,46 @@ enlarged or close-up-sized the way it would appear cropped tightly in a
 selfie... Get the head-to-body size ratio right for someone standing at a
 normal distance from the camera." Not independently live-verified with a
 real photo in this session.
+
+### `search-dresses.ts`: non-shopping domains (social media/CDN) slipping through
+
+Reported live with a screenshot: a dress card's image was hosted on
+`lookaside.fbsbx.com` (a Facebook CDN URL) and its actual content was an
+unrelated biography snippet ("Karuna Soni is the mother of the current
+K3 Salon leadership...") with no connection to clothing at all. Confirmed
+this is a real gap in `include_domains`: even scoped to a genuine
+shopping site, Tavily returned an image hosted on a completely unrelated
+domain — consistent with the already-documented finding that
+`include_domains` is only a ranking hint, not an enforced filter (see the
+main "real dress search" section above). `isRelevantToProfile`'s
+text-based filtering can't catch this class of problem either, since a
+Facebook-hosted image's title/description won't necessarily contain any
+of the off-topic-category keywords it checks for — the issue here is the
+SOURCE domain itself being fundamentally not a retailer, regardless of
+what its title claims.
+
+Fix: `NEVER_RETAILER_DOMAINS`, a denylist of platforms that host
+arbitrary user/business content rather than being dedicated storefronts
+(Facebook/fbsbx/fbcdn, Instagram, Pinterest, Twitter/X, TikTok, YouTube,
+Wikipedia, LinkedIn) — nothing served from these domains (or their
+subdomains) becomes a dress card or shop link, regardless of title/
+content relevance. Applied in both `buildDressCards` (checked before the
+text-relevance check, since there's no point running that check on a
+domain that's disqualified either way) and `buildShopLinks`. This is a
+denylist of platform TYPES, not specific retailers, so it should stay
+short and only include domains that are never legitimately a shopping
+destination — don't add a real (even niche) retailer to this list if one
+is ever reported as wrongly excluded; that's a different bug with a
+different fix.
+
+Verified live against the real Tavily API after the fix: a men's
+profile's dress-card results (6 cards) were checked and none were hosted
+on a denylisted domain — all resolved to real retailers (Etsy,
+Mysuittailor, Themoderngroom, and others already confirmed relevant in
+prior rounds). The specific `lookaside.fbsbx.com` case itself was not
+re-triggered and re-verified as fixed (Tavily's results vary per call),
+so if a social-media-hosted image is ever reported again, first check
+whether its domain is already in `NEVER_RETAILER_DOMAINS` — if it's a
+new platform not yet on the list, add it there rather than trying to
+patch the text-relevance filter, which structurally can't catch this
+class of problem.
