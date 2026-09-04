@@ -883,3 +883,69 @@ verify it live the same way `generate-image.ts`'s fixes were verified
 (a real reference photo + a real dress image through the actual route)
 before assuming the reused machinery transfers perfectly to a two-real-
 photo input instead of one-real-photo-plus-text-description.
+
+**Follow-up bug 1: results were dominated by a single site and a single
+colour**, reported live with a real screenshot — 6 results in a row all
+from Etsy, all the same terracotta/rust colour. Root cause, confirmed by
+re-reading `search-dresses.ts`: `buildSearchQuery` only ever read
+`profile.style[0]`/`profile.colorsLove[0]` (index 0 only) and ran ONE
+unscoped Tavily query per page — whichever single site happened to rank
+highest for that one query (Etsy, for this niche of menswear) dominated
+every image result, and every result was necessarily the same one colour
+since the query only ever asked for one.
+
+Fix: `buildQueryPlan` now fans out one task per entry in a fixed
+`SHOPPING_SITES` list (amazon.in, flipkart.com, myntra.com, ajio.com,
+meesho.com, etsy.com — a list of where to look, not a styling decision),
+round-robining through the user's FULL `colorsLove`/`style` lists (not
+just index 0) across those tasks. All tasks run in parallel
+(`Promise.allSettled`, so one site failing doesn't sink the request), each
+with `include_domains` set to that one site as a ranking hint, and results
+are interleaved (not concatenated) so the merged grid alternates
+sites/colours instead of running all of one task's cards before the next.
+
+**Confirmed live, and this matters for future changes to this file:
+Tavily's `include_domains` does NOT reliably restrict `images[]` to that
+domain.** A search scoped to `amazon.in` alone still returned 3/5 Etsy
+images in direct testing; scoping to `flipkart.com`/`myntra.com`/
+`ajio.com`/`meesho.com` individually returned almost entirely Etsy/eBay
+images for this test query, not the target site. An earlier version of
+this fix hard-filtered `buildDressCards` to only keep images matching the
+task's target domain — this was the "honest" choice but discarded almost
+every result for four of five sites, leaving too few dresses to show. The
+current version does NOT filter by expected domain: every card shows its
+own real, correct source site (never mislabeled), site-scoping just shifts
+what Tavily tends to return rather than guaranteeing it. If a query is
+ever reported as still too single-site-heavy, that reflects a genuine gap
+in what Tavily has actually indexed/crawled for that query — verify with a
+live query (`curl` directly against `api.tavily.com/search`) before
+assuming the query-fanout or interleaving logic itself is broken; both
+were confirmed working live (a men's profile with 3 colours returned 4
+distinct real sites and all 3 colours represented in a 6-result page; a
+women's profile returned Shopify/Nordstrom/Etsy with 2 different colours).
+Cross-task duplicate images (different tasks surfacing the same photo,
+common when several fall back to the same well-indexed site) are
+de-duplicated by image URL before the final `limit`-sized page is built.
+
+**Follow-up bug 2: try-on results looked like the input selfie with the
+outfit swapped in — same pose, same expression, same everything else** —
+reported live as "same to same copy-paste". This is the identical failure
+mode `generate-image.ts` went through 4 rounds fixing on `main` (see those
+notes above), but `try-on.ts` was written fresh for this branch and never
+inherited those specific fixes. Root cause: `try-on.ts`'s prompt had no
+anti-"cut-paste"/no-copy instruction and no forceful "this is a full
+re-styling, not a touch-up" framing — nothing telling the model it's
+allowed, let alone expected, to genuinely change the pose/expression/hair
+rather than defaulting to the easy path of barely touching the input
+photo. Fix: ported the exact hard-won language from
+`generate-image.ts`'s `buildLookEditPrompt`/`writeStylingAddendum` into
+`try-on.ts` — the anti-cut-paste instruction, explicit "not a light
+touch-up" framing repeated at both ends of the prompt, and a new
+`hairstyleRendering` field on `TryOnAddendum` with the same forceful
+"MUST be visibly restyled if it calls for a change" instruction that fixed
+this exact symptom in `generate-image.ts`. This was NOT independently
+live-verified in this session (no `OPENAI_API_KEY` available) — it is a
+faithful port of already-verified wording, not a new untested idea, but
+if this symptom is ever reported again, verify with a real photo +
+real dress through the actual route before assuming the port was
+faithful enough; do not re-derive the fix from scratch a third time.

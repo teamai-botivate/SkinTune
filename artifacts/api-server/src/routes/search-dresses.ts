@@ -12,14 +12,32 @@ import { logger } from "../lib/logger";
 const router: IRouter = Router();
 
 /**
+ * Major shopping sites to fan out per-site searches across, so results
+ * aren't dominated by whichever single site happens to rank highest for
+ * one query (confirmed live: a single unscoped query for "men's terracotta
+ * wedding suit" returned almost entirely Etsy images). This list itself
+ * isn't a styling decision — it's just where to look — so it's fine as a
+ * fixed list of real, general-purpose marketplaces; it does not encode any
+ * per-user preference or category logic.
+ */
+const SHOPPING_SITES = ["amazon.in", "flipkart.com", "myntra.com", "ajio.com", "meesho.com", "etsy.com"];
+
+/**
  * Builds a genuine shopping search query from the user's own profile —
  * gender, style world, colour preference, occasion, and budget — rather
  * than a fixed "dresses for women" string. Every clause here is
  * conditional on what the user actually answered, so two different
  * profiles produce two different queries and therefore different results;
  * there is no hardcoded product category or brand list.
+ *
+ * `colour` and `style` are passed in explicitly (rather than always reading
+ * profile.colorsLove[0]/style[0]) so callers can round-robin across the
+ * user's full colour/style lists — see buildQueryPlan below. Reusing only
+ * index 0 was the root cause of a real reported bug: every single result
+ * came back the same colour because every query, on every site and every
+ * page, asked for the same one colour.
  */
-function buildSearchQuery(profile: SkinTuneProfile, page: number): string {
+function buildSearchQuery(profile: SkinTuneProfile, colour: string, style: string): string {
   const normalizedPronouns = profile.pronouns.toLowerCase();
   const audience = normalizedPronouns.includes("women")
     ? "women's"
@@ -29,19 +47,44 @@ function buildSearchQuery(profile: SkinTuneProfile, page: number): string {
   const parts = [
     "buy",
     audience,
-    profile.style[0] || "",
-    profile.colorsLove[0] || "",
+    style,
+    colour,
     profile.occasion ? `${profile.occasion} outfit` : "outfit",
     "online",
     profile.budget ? `price ${profile.budget}` : "",
   ].filter(Boolean);
-  // On later pages ("More"), nudge the query to surface a different slice
-  // of results rather than re-fetching the same top results and
-  // de-duplicating — Tavily has no native pagination for one query.
-  if (page > 0 && profile.style[1]) parts.push(profile.style[1]);
-  else if (page > 0 && profile.colorsLove[1]) parts.push(profile.colorsLove[1]);
-  else if (page > 0) parts.push("more options");
   return parts.join(" ");
+}
+
+/**
+ * One (site, colour, style) combination to search — see buildQueryPlan.
+ */
+type QueryTask = { site: string; colour: string; style: string };
+
+/**
+ * Builds the set of per-site, per-colour/style search tasks for one page of
+ * results. Cycles through SHOPPING_SITES and the user's own colorsLove/
+ * style lists (falling back to a single empty-string entry if the user
+ * didn't provide any, so the query still forms without that clause) so
+ * that across a page of results, both the SITE and the COLOUR/STYLE
+ * genuinely vary instead of every task asking the same single-colour,
+ * single-site question. `page` offsets which slice of the colour/style
+ * lists this page starts from, so "More dresses" surfaces different
+ * combinations rather than repeating page one's.
+ */
+function buildQueryPlan(profile: SkinTuneProfile, page: number, taskCount: number): QueryTask[] {
+  const colours = profile.colorsLove.length ? profile.colorsLove : [""];
+  const styles = profile.style.length ? profile.style : [""];
+  const tasks: QueryTask[] = [];
+  for (let i = 0; i < taskCount; i++) {
+    const n = page * taskCount + i;
+    tasks.push({
+      site: SHOPPING_SITES[n % SHOPPING_SITES.length],
+      colour: colours[n % colours.length],
+      style: styles[n % styles.length],
+    });
+  }
+  return tasks;
 }
 
 /** Extracts the hostname from a URL, or null if it isn't a valid absolute URL. */
@@ -100,12 +143,29 @@ function extractPrice(content: string): string | undefined {
 }
 
 /**
- * Builds dress photo cards directly from Tavily's images[] — see this
- * file's module doc comment for why images[] and results[] are NOT paired
- * by hostname (they come from largely different sites and rarely overlap).
- * Each card's "visit store" link is that same photo's own source domain,
- * normalized from any CDN hostname to the real retailer — a real, always-
- * present link, just not guaranteed to be the exact product page.
+ * Builds dress photo cards from one site-scoped Tavily search's images[] —
+ * see this file's module doc comment for why images[] and results[] are
+ * NOT paired by hostname (they come from largely different sites and
+ * rarely overlap). Each card's "visit store" link is that same photo's own
+ * ACTUAL source domain (not necessarily the site this task was scoped to),
+ * normalized from any CDN hostname to the real retailer.
+ *
+ * Deliberately does NOT filter out images whose real domain differs from
+ * the site this task searched for. Confirmed live: Tavily's
+ * `include_domains` does not reliably keep `images[]` on that one domain —
+ * a search scoped to amazon.in/flipkart.com/myntra.com/ajio.com/meesho.com
+ * mostly still returned other sites' images for real test queries (these
+ * sites are often just less crawlable/indexed by Tavily for niche fashion
+ * items than Etsy is). An earlier version of this function hard-filtered
+ * to the expected domain, which correctly avoided ever mislabeling an
+ * image's source, but also threw away almost every result for four of five
+ * target sites, leaving too few dresses to show. Every card here still
+ * shows its OWN real, correct source site (never a wrong label) — the
+ * site-scoping is a ranking hint that shifts what Tavily returns, not a
+ * guarantee of which real site a given card ends up from. If site coverage
+ * for a query is ever reported as still too Etsy-heavy, that's a genuine
+ * data-availability gap in what Tavily has indexed for that query, not a
+ * pairing bug in this function — verify with a live query first.
  */
 function buildDressCards(images: TavilyImage[], limit: number, idOffset: number): DressResult[] {
   const cards: DressResult[] = [];
@@ -149,6 +209,16 @@ function buildShopLinks(results: TavilyResult[], limit: number): ShopLink[] {
   return links;
 }
 
+/** Interleaves several arrays round-robin (a,b,c, a,b,c, ...) instead of concatenating them, so the merged list alternates sites/colours instead of running all of one site's cards before the next. */
+function interleave<T>(lists: T[][]): T[] {
+  const merged: T[] = [];
+  const maxLen = Math.max(0, ...lists.map((l) => l.length));
+  for (let i = 0; i < maxLen; i++) {
+    for (const list of lists) if (list[i] !== undefined) merged.push(list[i]);
+  }
+  return merged;
+}
+
 router.post("/search-dresses", async (req, res) => {
   const parsed = SearchDressesRequestSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -160,12 +230,52 @@ router.post("/search-dresses", async (req, res) => {
   const page = Math.floor(offset / limit);
 
   try {
-    const query = buildSearchQuery(profile, page);
-    // Ask Tavily for comfortably more than `limit` images since a few are
-    // typically dropped for un-parseable URLs.
-    const { images, results } = await tavilySearch(query, Math.max(limit * 2, 16));
-    const dresses = buildDressCards(images, limit, offset);
-    const shopLinks = buildShopLinks(results, 8);
+    // One task per site (see SHOPPING_SITES), each also varying colour and
+    // style across the user's own lists — see buildQueryPlan's doc comment
+    // for why this replaced a single unscoped query (it was the root cause
+    // of both "only one site" and "only one colour" being reported live).
+    const tasks = buildQueryPlan(profile, page, SHOPPING_SITES.length);
+    const perTaskLimit = Math.max(2, Math.ceil((limit * 2) / tasks.length));
+
+    const taskResults = await Promise.allSettled(
+      tasks.map(async (task) => {
+        const query = buildSearchQuery(profile, task.colour, task.style);
+        const { images, results } = await tavilySearch(query, perTaskLimit * 2, [task.site]);
+        return { task, images, results };
+      }),
+    );
+
+    const perTaskCards: DressResult[][] = [];
+    const allResults: TavilyResult[] = [];
+    for (const outcome of taskResults) {
+      if (outcome.status === "rejected") {
+        logger.warn({ err: outcome.reason }, "One per-site dress search task failed; continuing with the others");
+        continue;
+      }
+      const { images, results } = outcome.value;
+      perTaskCards.push(buildDressCards(images, perTaskLimit, 0));
+      allResults.push(...results);
+    }
+
+    // Interleave so the grid alternates across tasks (site/colour/style
+    // combinations) instead of running all of one task's cards before the
+    // next, de-duplicate by image URL (different tasks can surface the
+    // same photo, especially when several fall back to the same
+    // well-indexed site), then re-number ids sequentially.
+    const seenImageUrls = new Set<string>();
+    const merged: DressResult[] = [];
+    for (const dress of interleave(perTaskCards)) {
+      if (merged.length >= limit) break;
+      if (seenImageUrls.has(dress.imageUrl)) continue;
+      seenImageUrls.add(dress.imageUrl);
+      merged.push(dress);
+    }
+    const dresses: DressResult[] = merged.map((dress, i) => ({ ...dress, id: `dress-${offset + i + 1}` }));
+    const shopLinks = buildShopLinks(allResults, 8);
+
+    if (dresses.length === 0) {
+      throw new Error("No real dress results found across any site for this search — every per-site task returned nothing usable.");
+    }
 
     const data = SearchDressesResponseSchema.parse({
       results: dresses,

@@ -27,18 +27,20 @@ type TryOnAddendum = {
   bodyLanguage: string;
   environmentAndSetting: string;
   fitNotes: string;
+  hairstyleRendering: string;
 };
 
 const TRY_ON_ADDENDUM_JSON_SCHEMA = {
   type: "object",
   properties: {
-    expression: { type: "string", description: "A specific, concrete facial expression for this shot, reasoned from this person's actual resting expression in their photo and this dress's mood — not generic." },
-    headAndCameraAngle: { type: "string", description: "Camera height and head angle/tilt for this specific shot." },
-    bodyLanguage: { type: "string", description: "How the body, shoulders, hands, and weight are positioned — concrete and specific to this dress's mood." },
+    expression: { type: "string", description: "A specific, concrete facial expression for this shot, reasoned from this person's actual resting expression in their photo and this dress's mood — not generic. Must NOT be a neutral, closed-mouth, direct-to-camera default; commit to something specific." },
+    headAndCameraAngle: { type: "string", description: "Camera height and head angle/tilt for this specific shot — must differ from a plain straight-on head-level shot unless that genuinely suits this dress and occasion." },
+    bodyLanguage: { type: "string", description: "How the body, shoulders, hands, and weight are positioned — concrete and specific to this dress's mood, not a stiff standing-still default." },
     environmentAndSetting: { type: "string", description: "A specific background/setting/lighting that genuinely fits this exact dress and the person's stated occasion — reasoned fresh, not a stock choice." },
     fitNotes: { type: "string", description: "How this exact dress (as seen in its real product photo) should drape and fit this specific person's actual visible build/proportions from their photo." },
+    hairstyleRendering: { type: "string", description: "How the hair should actually look in this shot given the dress's style and occasion — restyled if that suits the look better, described concretely on this person's real head shape/hair as seen in their photo." },
   },
-  required: ["expression", "headAndCameraAngle", "bodyLanguage", "environmentAndSetting", "fitNotes"],
+  required: ["expression", "headAndCameraAngle", "bodyLanguage", "environmentAndSetting", "fitNotes", "hairstyleRendering"],
   additionalProperties: false,
 } as const;
 
@@ -63,14 +65,14 @@ async function writeTryOnAddendum(
         {
           role: "system",
           content:
-            "You are a fashion photographer directing a virtual try-on shoot. You are shown two images: a real person's own photo, and a real product photo of a specific dress/outfit they want to try on. Your job is to genuinely study both — this person's face, build, and vibe, and this exact garment's cut, colour, and mood — and decide, like a photographer directing a real shoot, the facial expression, head/camera angle, body language, background/setting, and how this specific garment should drape on this specific body. Nothing should be a generic, reusable default: reason freshly about this exact person and this exact garment together. The ONLY thing that must stay the same as the input photo is who this person is (face/identity) — everything else about pose, expression, and setting is yours to decide for the best result. Never comment on attractiveness or body shape judgmentally — this is purely practical photography direction. Output must be valid JSON matching the given schema exactly.",
+            "You are a fashion photographer directing a virtual try-on shoot — the kind of natural, well-composed \"outfit change\" edit popular on Instagram/Reels, where the same real person appears in a new outfit but the photo looks like a genuine, freshly-taken photograph, never a lightly-touched-up copy of their original selfie. You are shown two images: a real person's own photo, and a real product photo of a specific dress/outfit they want to try on. Your job is to genuinely study both — this person's face, build, and vibe, and this exact garment's cut, colour, and mood — and decide, like a photographer directing a real shoot, the facial expression, head/camera angle, body language, background/setting, hairstyle, and how this specific garment should drape on this specific body. This is a full re-styling for a new shoot, not a light touch-up on the input photo — the pose, expression, hair, and setting should all genuinely change from whatever they were in the original photo; do not default to reproducing the input photo's own pose, expression, or framing just because it's easy. Nothing should be a generic, reusable default: reason freshly about this exact person and this exact garment together, and commit to specific, concrete choices rather than safe generic ones. The ONLY thing that must stay the same as the input photo is who this person is (face/identity, skin tone) — hairstyle, expression, pose, and setting are all expected and encouraged to change as much as suits the look; changing them does not break identity. Never comment on attractiveness or body shape judgmentally — this is purely practical photography direction. Output must be valid JSON matching the given schema exactly.",
         },
         {
           role: "user",
           content: [
             {
               type: "text",
-              text: `Dress/outfit to try on this person: "${dress.title}" (from ${dress.siteName}). Person's stated occasion: ${profile.occasion || "everyday"}, build: ${profile.bodyBuild || "not specified"}, fit preference: ${profile.fit || "not specified"}, pronouns: ${profile.pronouns || "not specified"} (context only, not a template lookup). Study their actual face/build in the first photo and this exact garment in the second photo, then direct this shoot.`,
+              text: `Dress/outfit to try on this person: "${dress.title}" (from ${dress.siteName}). Person's stated occasion: ${profile.occasion || "everyday"}, build: ${profile.bodyBuild || "not specified"}, fit preference: ${profile.fit || "not specified"}, pronouns: ${profile.pronouns || "not specified"} (context only, not a template lookup). Study their actual face/build/hair in the first photo and this exact garment in the second photo, then direct this shoot as a genuinely new photograph — a different pose, expression, and hairstyle from whatever the input photo happens to show, whatever combination actually suits this garment and occasion best on this real person.`,
             },
             { type: "image_url", image_url: { url: photoUrl } },
             { type: "image_url", image_url: { url: dress.imageUrl } },
@@ -101,15 +103,22 @@ async function writeTryOnAddendum(
 
 function buildTryOnPrompt(dress: DressResult, addendum: TryOnAddendum | null): string {
   const parts = [
-    `This is a photo of a real specific person, shown alongside a real product photo of a dress/outfit ("${dress.title}"). The ONLY thing that must never change is WHO this person is: their face, facial structure, and skin tone must stay recognizably this exact same person. Everything else — hairstyle, expression, pose, body language, background — is yours to change as needed for the best result.`,
+    `This is a photo of a real specific person, shown alongside a real product photo of a dress/outfit ("${dress.title}"). The ONLY thing that must never change is WHO this person is: their face, facial structure, and skin tone must stay recognizably this exact same person. Everything else — hairstyle, expression, pose, body language, background — is yours to change as much as needed for the best result. Preserving identity is not the same as preserving the original photo; you are re-styling this person for a new shoot, not lightly editing their existing photo.`,
+    // Anti "cut-paste face" instruction, ported from generate-image.ts —
+    // the failure mode this guards against is visibly distinct from
+    // ordinary identity drift: the face reads as pasted onto a different
+    // pose/lighting/body rather than photographed as one coherent scene.
+    "The face must be seamlessly and naturally part of the new photo — matching the new lighting, angle, and skin tone rendering of the rest of the scene. It must never look like a face cut out and pasted onto a different body or pose; the neck, jaw, hairline, and shoulders must blend continuously into the body below with consistent lighting and perspective, as if this is one single photograph taken in one moment, not a composite of the original photo with a new outfit glued on.",
     "Dress this exact person in the exact garment shown in the second reference image — match its actual cut, colour, pattern, and details faithfully, not a generic approximation.",
-    "The face must be seamlessly and naturally part of the new photo — matching the new lighting, angle, and skin tone rendering of the rest of the scene. It must never look like a face cut out and pasted onto a different body; the neck, jaw, and shoulders must blend continuously into the body below with consistent lighting and perspective, as one single photograph.",
     "The garment must fit this exact person's actual body correctly: drape, sit, and follow their real proportions as if properly worn, not pasted on or floating away from the body.",
     addendum
-      ? `Pose, expression, and setting for this shot (decided by studying this exact person and this exact garment together): Facial expression: ${addendum.expression} Head and camera angle: ${addendum.headAndCameraAngle} Body language and pose: ${addendum.bodyLanguage} Background/setting: ${addendum.environmentAndSetting} Fit: ${addendum.fitNotes}`
-      : "Compose this as one natural, well-lit, coherent photograph.",
-    "Natural lighting, tasteful and supportive, no beauty filter, no visible text or watermark. Professional editorial photo quality, the kind of natural, well-composed photo you'd see in a stylish social-media outfit post.",
-    "Reminder: keep the same face and identity as the input photo, seamlessly integrated into the new scene — but hairstyle, expression, pose, and background must change as directed above to give the best possible result showing this exact garment on this exact person.",
+      ? `New hairstyle rendering for this shot: ${addendum.hairstyleRendering} This hair MUST be visibly restyled to match that description if it calls for a change from the input photo — do not simply leave the hair exactly as it appears in the original photo. Changing hairstyle does NOT change who this person is, so restyle it with confidence.`
+      : "",
+    addendum
+      ? `Pose, expression, and setting for this shot (decided by studying this exact person and this exact garment together, and deliberately different from a plain reproduction of the input photo's own pose/expression): Facial expression: ${addendum.expression} Head and camera angle: ${addendum.headAndCameraAngle} Body language and pose: ${addendum.bodyLanguage} Background/setting: ${addendum.environmentAndSetting} Fit: ${addendum.fitNotes}`
+      : "Compose this as one natural, well-lit, coherent photograph with a pose, expression, and setting genuinely different from the input photo's own — a new shoot, not a copy of the original.",
+    "Natural lighting, tasteful and supportive, no beauty filter, no visible text or watermark. Professional editorial photo quality, the kind of natural, well-composed photo you'd see in a stylish social-media outfit post — not a stiff studio ID photo, and not a barely-modified copy of the input selfie.",
+    "Reminder: keep the same face and identity as the input photo, seamlessly integrated into the new scene (not pasted-looking) — but hairstyle, expression, pose, and background must all change as directed above, confidently and visibly, to give the best possible result showing this exact garment on this exact person. This is a full re-styling for a new photograph, not a light touch-up of the original.",
   ];
   return parts.filter(Boolean).join(" ");
 }

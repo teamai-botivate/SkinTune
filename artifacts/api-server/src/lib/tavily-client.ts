@@ -48,10 +48,18 @@ function getTavilyApiKey(): string {
  * (for real product photos) and page results (for price/link context) in a
  * single call — Tavily bills per search call, not per returned item, so
  * asking for more of both in one call is strictly cheaper than two calls.
+ *
+ * `includeDomains`, when given, is passed through as a hint — but this is
+ * NOT a hard filter of Tavily's `images[]`: confirmed live (see
+ * search-dresses.ts's doc comment) that `images[]` can still include
+ * photos from other domains even with `include_domains` set to one
+ * specific site. Callers that need genuinely on-domain images must filter
+ * the returned `images[]` by hostname themselves after this call returns.
  */
 export async function tavilySearch(
   query: string,
   maxResults: number,
+  includeDomains?: string[],
 ): Promise<TavilySearchResponse> {
   const apiKey = getTavilyApiKey();
   const res = await fetch(TAVILY_SEARCH_URL, {
@@ -64,6 +72,7 @@ export async function tavilySearch(
       include_images: true,
       include_image_descriptions: true,
       max_results: maxResults,
+      ...(includeDomains?.length ? { include_domains: includeDomains } : {}),
     }),
   });
 
