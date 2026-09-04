@@ -25,7 +25,7 @@ const queryClient = new QueryClient();
 type Screen =
   | 'welcome' | 'home' | 'name' | 'profile' | 'age' | 'height' | 'consent' | 'photo' | 'appearance'
   | 'body-style' | 'colors-occasion' | 'final-prefs' | 'review' | 'generating' | 'dresses'
-  | 'try-on' | 'settings';
+  | 'dress-detail' | 'try-on' | 'settings';
 
 const initialProfile: SkinTuneProfile = {
   name: '', pronouns: '', ageGroup: '', height: '', photoUrl: '', bodyBuild: '',
@@ -516,22 +516,21 @@ function Home({ profile, savedDresses, onNew, onResults, onSettings, onQuickStar
   </main></div>;
 }
 
-function DressGrid({ profile, dresses, shopLinks, hasMore, loadingMore, loadMoreError, onTryOn, onLoadMore, onBack }: {
+function DressGrid({ profile, dresses, shopLinks, hasMore, loadingMore, loadMoreError, onViewDress, onLoadMore, onBack }: {
   profile: SkinTuneProfile; dresses: DressResult[]; shopLinks: ShopLink[]; hasMore: boolean; loadingMore: boolean; loadMoreError: string;
-  onTryOn: (dress: DressResult) => void; onLoadMore: () => void; onBack: () => void;
+  onViewDress: (dress: DressResult) => void; onLoadMore: () => void; onBack: () => void;
 }) {
   return <Shell profile={profile} onBack={onBack} onSettings={onBack}><div className="animate-rise">
     <div className="flex flex-wrap items-end justify-between gap-6"><div><p className="text-xs font-bold uppercase tracking-[.2em] text-primary">✨ Real Dresses For You</p><h1 className="mt-3 font-serif text-[clamp(2.8rem,6vw,5.4rem)] leading-[.9] tracking-[-.05em]">Pick one to<br /><em className="text-primary">try it on.</em></h1></div></div>
-    <p className="mt-6 max-w-xl text-muted-foreground">Real pieces from real stores, matched to {profile.occasion.toLowerCase() || 'your moment'}. Tap any one to see it on you, then decide if it's worth buying.</p>
+    <p className="mt-6 max-w-xl text-muted-foreground">Real pieces from real stores, matched to {profile.occasion.toLowerCase() || 'your moment'}. Tap any one to see the full piece before trying it on.</p>
     <div className="mt-10 grid gap-6 md:grid-cols-2 lg:grid-cols-3">{dresses.map((dress) =>
       <article key={dress.id} className="group rounded-[1.45rem] border border-border bg-card p-2 shadow-[0_8px_30px_hsl(var(--foreground)/.04)]">
-        <button type="button" onClick={() => onTryOn(dress)} data-testid={`card-dress-${dress.id}`} className="focus-ring block w-full text-left">
+        <button type="button" onClick={() => onViewDress(dress)} data-testid={`card-dress-${dress.id}`} className="focus-ring block w-full text-left">
           <DressVisual dress={dress} />
           <div className="p-4 pb-3"><div className="flex items-start justify-between gap-3"><h2 className="min-w-0 font-serif text-xl leading-snug line-clamp-2">{dress.title}</h2><ChevronRight className="mt-1 shrink-0 text-muted-foreground transition group-hover:translate-x-1" size={20} /></div>
             <p className="mt-2 text-xs font-bold uppercase tracking-[.13em] text-primary">{dress.siteName}</p>
           </div>
         </button>
-        <div className="flex items-center justify-between border-t border-border/70 px-4 py-3"><button type="button" onClick={() => onTryOn(dress)} data-testid={`button-try-on-${dress.id}`} className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-3 py-2 text-xs font-bold text-primary-foreground"><Wand2 size={14} /> Try this on</button></div>
       </article>
     )}</div>
     {hasMore && <div className="mt-8 flex flex-col items-center gap-2">
@@ -546,6 +545,38 @@ function DressGrid({ profile, dresses, shopLinks, hasMore, loadingMore, loadMore
     </div>}
     <div className="mt-10 rounded-2xl border border-border bg-secondary/55 p-5 text-sm text-muted-foreground"><div className="flex items-start gap-3"><Info size={17} className="mt-0.5 shrink-0 text-primary" /><p>These are real, purchasable pieces found from real stores — availability, price, and sizing can change on the store's own site. "Try this on" shows a visualisation of you wearing it; always confirm details before buying.</p></div></div>
   </div></Shell>;
+}
+
+/**
+ * Preview step between the grid and the actual try-on generation — added
+ * per direct user request: tapping a card used to trigger try-on
+ * immediately with no confirmation, which made it easy to accidentally
+ * generate the wrong dress in a grid of similar-looking pieces (a real,
+ * live-reported mismatch: the user believed they'd picked a black outfit
+ * but the try-on came back on an ivory one — the most likely explanation
+ * is an accidental click on a neighbouring card, since there was no
+ * intermediate screen to catch it). This shows the dress full-size with
+ * its real title/site before the (slow, ~2 minute) generation call runs,
+ * so the user can visually confirm this is genuinely the piece they meant
+ * before committing to it.
+ */
+function DressDetail({ dress, onBack, onTryOn }: {
+  dress: DressResult; onBack: () => void; onTryOn: () => void;
+}) {
+  return <div className="noise min-h-[100dvh]"><Header onBack={onBack} onSettings={onBack} /><main className="mx-auto max-w-5xl px-4 py-8 sm:px-8 sm:py-14"><div className="grid gap-8 lg:grid-cols-[1fr_.85fr] lg:items-start">
+    <div className="relative min-h-[420px] overflow-hidden rounded-[1.4rem] bg-[#e4d6c4]">
+      <img src={dress.imageUrl} alt={dress.title} className="size-full object-cover" />
+    </div>
+    <div className="animate-rise lg:pt-4">
+      <p className="text-xs font-bold uppercase tracking-[.18em] text-primary">{dress.siteName}</p>
+      <h1 className="mt-4 font-serif text-[clamp(2.2rem,5vw,3.4rem)] leading-[.98] tracking-[-.03em]">{dress.title}</h1>
+      <p className="mt-5 text-sm leading-relaxed text-muted-foreground">A real piece from {dress.siteName}. Confirm this is the one you want, then try it on — this uses your uploaded photo and takes about a minute.</p>
+      <div className="mt-8 flex flex-wrap gap-3">
+        <button type="button" onClick={onTryOn} data-testid="button-confirm-try-on" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-bold text-primary-foreground"><Wand2 size={16} /> Try this on</button>
+        <a href={dress.sourceUrl} target="_blank" rel="noreferrer" data-testid="button-visit-store" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold hover:border-primary/50">Visit {dress.siteName}</a>
+      </div>
+    </div>
+  </div></main></div>;
 }
 
 function TryOn({ dress, profile, imageUrl, loading, error, saved, onSave, onBack, onTryAnother, onRetry }: {
@@ -621,9 +652,14 @@ function SkinTune() {
   const update = (patch: Partial<SkinTuneProfile>) => setProfile((old) => ({ ...old, ...patch }));
   const index = wizardScreens.indexOf(screen);
   const go = (next: Screen) => { setScreen(next); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-  const back = () => { if (screen === 'try-on') go('dresses'); else if (index > 0) go(wizardScreens[index - 1]); else go(profile.name ? 'home' : 'welcome'); };
+  const back = () => { if (screen === 'try-on') go('dress-detail'); else if (screen === 'dress-detail') go('dresses'); else if (index > 0) go(wizardScreens[index - 1]); else go(profile.name ? 'home' : 'welcome'); };
   const saveProfile = () => { localStorage.setItem('skintune-profile', JSON.stringify(profile)); go('generating'); };
   const openSettings = () => go(profile.name ? 'settings' : 'welcome');
+
+  const viewDress = (dress: DressResult) => {
+    setSelectedDress(dress);
+    go('dress-detail');
+  };
 
   const runTryOn = (dress: DressResult) => {
     setSelectedDress(dress);
@@ -678,7 +714,7 @@ function SkinTune() {
   if (screen === 'home') return <Home profile={profile} savedDresses={savedDresses} onNew={() => { update({ photoUrl: '' }); go('name'); }} onResults={() => go(dresses.length ? 'dresses' : 'generating')} onSettings={openSettings} onQuickStart={(occasion) => { update({ occasion }); go('final-prefs'); }} />;
   if (screen === 'settings') return <Settings profile={profile} deletedNotice={deletedNotice} onBack={() => go(profile.name ? 'home' : 'welcome')} onDelete={() => { localStorage.removeItem('skintune-profile'); localStorage.removeItem('skintune-saved-looks'); localStorage.removeItem('skintune-feedback'); setProfile(initialProfile); setDeletedNotice(true); setTimeout(() => go('welcome'), 900); }} />;
   if (screen === 'photo') return <PhotoPanel profile={profile} update={update} onContinue={() => go('appearance')} onBack={back} />;
-  if (screen === 'dresses') return <DressGrid profile={profile} dresses={dresses} shopLinks={shopLinks} hasMore={hasMoreDresses} loadingMore={loadingMoreDresses} loadMoreError={loadMoreError} onTryOn={runTryOn} onLoadMore={() => {
+  if (screen === 'dresses') return <DressGrid profile={profile} dresses={dresses} shopLinks={shopLinks} hasMore={hasMoreDresses} loadingMore={loadingMoreDresses} loadMoreError={loadMoreError} onViewDress={viewDress} onLoadMore={() => {
     setLoadingMoreDresses(true);
     setLoadMoreError('');
     searchDresses(profile, dresses.length, DRESS_PAGE_SIZE)
@@ -686,6 +722,7 @@ function SkinTune() {
       .catch((err) => { const detail = err instanceof Error ? err.message : String(err); console.error('[SkinTune] Load more dresses failed:', detail); setLoadMoreError(detail); })
       .finally(() => setLoadingMoreDresses(false));
   }} onBack={() => go('home')} />;
+  if (screen === 'dress-detail' && selectedDress) return <DressDetail dress={selectedDress} onBack={back} onTryOn={() => runTryOn(selectedDress)} />;
   if (screen === 'try-on' && selectedDress) return <TryOn dress={selectedDress} profile={profile} imageUrl={tryOnImageUrl} loading={tryOnLoading} error={tryOnError} saved={isDressSaved(selectedDress.id)} onSave={() => setSavedDresses((old) => isDressSaved(selectedDress.id) ? old.filter((item) => item.dress.id !== selectedDress.id) : [...old, { dress: selectedDress, imageUrl: tryOnImageUrl }])} onBack={back} onTryAnother={() => go('dresses')} onRetry={() => runTryOn(selectedDress)} />;
   if (screen === 'generating') return <Generating steps={searchSteps} error={searchError} onRetry={() => setSearchAttempt((v) => v + 1)} onBack={() => go(profile.name ? 'home' : 'welcome')} />;
 

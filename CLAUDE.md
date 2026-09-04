@@ -1445,3 +1445,29 @@ print. Verify this fix live (a real couple/group photo actually getting
 rejected) before assuming 1500 is sufficient for every case — this was
 raised based on the `finish_reason: "length"` signal, not a confirmed
 sufficient value from a real successful run.
+
+### Frontend: added a dress-detail preview step before try-on
+
+Reported live: tapping a dress card previously triggered try-on
+immediately with no confirmation step, and the user reported that a
+try-on came back on the wrong dress (believed they'd tapped a black
+outfit, got an ivory one back). The most likely explanation, given no
+intermediate screen existed to catch it: an accidental tap on a
+neighbouring card in a grid of visually similar pieces (multiple similar
+cream/ivory/beige suits were on screen at once in the reported case) —
+`TryOn`'s image area never shows the original dress photo as a fallback,
+only the generated result or a loading/error state, so what was
+visible was genuinely the try-on OF the dress that was clicked, not a
+display bug.
+
+Added a new `dress-detail` screen (`DressDetail` component) between the
+grid and the actual try-on generation: tapping a card now navigates here
+first, showing the dress full-size with its real title and site, plus an
+explicit "Try this on" button (only that click starts the ~1-2 minute
+generation) and a "Visit {site}" link. `DressGrid`'s card `onClick`
+(previously `onTryOn`, firing immediately) is now `onViewDress`, and the
+per-card "Try this on" button that used to sit under each grid card was
+removed since confirming via the detail screen is now the only path —
+this gives the user a moment to visually confirm it's genuinely the
+piece they meant before committing to the slow generation call, directly
+addressing the reported mismatch's likely cause.
