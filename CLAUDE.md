@@ -1192,3 +1192,41 @@ a strict-sounding instruction will predictably bleed into suppressing
 those too. Not independently live-verified with a real photo in this
 session — verify live if this exact "cut-paste expression" symptom is
 reported again before writing a fifth round from scratch.
+
+**Round 5: after Round 4's fix, real generated results showed genuinely
+good face/build/expression match — the user confirmed this — but hair
+was still noticeably shorter/neater than the person's real (longer,
+wavier) hair.** Diagnosing this properly required inspecting the actual
+`writeTryOnAddendum` agent output (the `tryOnAddendum` object, logged via
+`logger.debug`), which surfaced a real, separate tooling problem: on
+Render, this debug-level log never appeared in the log viewer even after
+setting `LOG_LEVEL=debug` as an environment variable and redeploying,
+across multiple attempts. Root cause not fully confirmed (the app's own
+`logger.ts` correctly reads `process.env.LOG_LEVEL`, so the env var
+should work) — the most likely explanation is that Render's own log
+viewer UI has a SEPARATE level filter on top of whatever the app itself
+emits, and that viewer-side filter was not (or could not be) widened
+enough to show `debug`-level entries, even though the underlying
+`LOG_LEVEL=debug` env var was correctly set. **Practical fix, not a full
+root-cause resolution:** the addendum log was moved from `logger.debug`
+to `logger.info` in `try-on.ts` (see the comment at that call site) —
+`info`-level entries were reliably visible in every Render log dump in
+this debugging session, so this trades a small amount of log verbosity
+for actually being able to inspect styling decisions when needed. If this
+route needs more structured-decision debugging later, this log line is
+the way to see it; don't assume a `debug`-level addition will be visible
+in Render's viewer without checking first.
+
+Without that log actually confirming the agent's literal
+`hairstyleRendering` output, the hairstyle fix in this round is
+prompt-strengthening based on the pattern from Rounds 2-4 (schema field
+descriptions that are too permissive tend to produce conservative,
+close-to-original outputs) rather than a directly diagnosed root cause:
+`hairstyleRendering`'s schema description was rewritten to explicitly
+instruct the agent to make a genuine styling/grooming DECISION (e.g.
+"neater and more polished for a formal look") reasoned from the person's
+real hair length/texture, rather than defaulting to describing the input
+photo's hair as-is, and to state a specific choice rather than a vague
+"well-groomed hair." If hairstyle mismatch is reported again after this,
+check the now-visible `info`-level "Try-on addendum generated" log first
+to see what the agent is actually deciding before writing a sixth round.

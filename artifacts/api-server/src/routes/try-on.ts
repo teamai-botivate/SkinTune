@@ -38,7 +38,7 @@ const TRY_ON_ADDENDUM_JSON_SCHEMA = {
     bodyLanguage: { type: "string", description: "How the body, shoulders, hands, and weight are positioned — concrete and specific to this dress's mood, not a stiff standing-still default." },
     environmentAndSetting: { type: "string", description: "A specific background/setting/lighting that genuinely fits this exact dress and the person's stated occasion — reasoned fresh, not a stock choice." },
     fitNotes: { type: "string", description: "How this exact dress (as seen in its real product photo) should drape and fit this specific person's actual visible build/proportions from their photo." },
-    hairstyleRendering: { type: "string", description: "How the hair should actually look in this shot given the dress's style and occasion — restyled if that suits the look better, described concretely on this person's real head shape/hair as seen in their photo." },
+    hairstyleRendering: { type: "string", description: "A concrete, specific styling decision for the hair in this shot — genuinely reasoned from this person's real hair length/texture/type as seen in their photo and what would look best groomed and styled for this exact dress and occasion (e.g. neater and more polished for a formal look, textured and relaxed for casual). Do not default to simply describing the hair exactly as it looks in the input photo — decide how a stylist would groom and present it for THIS shoot, even if that's a genuinely different look (different length, texture treatment, or styling) from their everyday appearance. State the specific styling choice, not a vague 'well-groomed hair'." },
   },
   required: ["expression", "headAndCameraAngle", "bodyLanguage", "environmentAndSetting", "fitNotes", "hairstyleRendering"],
   additionalProperties: false,
@@ -96,7 +96,16 @@ async function writeTryOnAddendum(
     const raw = completion.choices[0]?.message?.content?.trim();
     if (!raw) return null;
     const addendum = JSON.parse(raw) as TryOnAddendum;
-    logger.debug({ dressId: dress.id, tryOnAddendum: addendum }, "Try-on addendum generated");
+    // Logged at `info` (not `debug`) deliberately: this is the ONLY place
+    // the actual styling decision for a try-on is visible, and depending
+    // on `debug`-level logging being correctly configured on a given
+    // deployment (a real point of friction — Render's own log viewer has
+    // its own separate level filter on top of LOG_LEVEL, so even a
+    // correctly-set LOG_LEVEL=debug can still show nothing if the viewer's
+    // filter isn't also widened) has repeatedly gotten in the way of
+    // diagnosing real styling-quality issues on this route. Do not lower
+    // this back to `debug` without a more reliable way to inspect it.
+    logger.info({ dressId: dress.id, tryOnAddendum: addendum }, "Try-on addendum generated");
     return addendum;
   } catch (err) {
     logger.warn({ err, dressId: dress.id }, "Try-on addendum agent failed; continuing without it");
