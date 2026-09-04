@@ -1471,3 +1471,44 @@ removed since confirming via the detail screen is now the only path —
 this gives the user a moment to visually confirm it's genuinely the
 piece they meant before committing to the slow generation call, directly
 addressing the reported mismatch's likely cause.
+
+**Round 8, a genuinely new failure mode: a real try-on came back with the
+correct face and garment, but the exact same pose, sitting position,
+chair, and background as the DRESS'S OWN product photo** — reported live
+with a screenshot (a Myntassets kurta product shot showing a model seated
+in a carved wooden chair; the try-on output showed the user, correct face,
+seated in that exact same chair in that exact same pose). Confirmed with
+the user directly that the face genuinely was theirs (a real, successful
+identity swap) — the problem was specifically that the SECOND reference
+image's (the product photo's) pose/setting had been copied wholesale.
+
+Root cause: every prior round's "don't copy the reference photo's
+pose/expression" instruction was written singular — it always meant the
+FIRST reference image (the user's own selfie). Nothing in the prompt ever
+told the model not to copy the SECOND reference image's (the product
+photo's) pose, model stance, furniture, or background — only that its
+garment design should transfer. With no instruction against it, the model
+took the path of least resistance and copied that photo's whole
+composition instead of directing something fresh.
+
+Fix: added an explicit instruction that ONLY the garment itself (cut,
+colour, pattern, fabric) should come from the second reference image —
+its pose, model, chair/furniture, and background must not appear in the
+output. Extended to all three places this needed saying: the system
+prompt (now explicitly frames the product photo as "typically showing a
+DIFFERENT model, in the store's own pose... none of that belongs in your
+output"), the main edit prompt (a new dedicated instruction right after
+the garment-matching line), and the closing reminder (now three numbered
+rules instead of two, with the third specifically calling out the second
+reference's pose/setting). Framed the overall task as directing "an
+entirely new, third photograph, not choosing between the two you were
+shown" — naming the actual failure mode (defaulting to one of the two
+input photos instead of composing something new) explicitly, the same
+pattern that worked for prior rounds' fixes on this file.
+
+Not independently live-verified with a real photo in this session — if
+a generated result is ever reported as copying the PRODUCT photo's pose/
+setting again after this, that's a different, more specific symptom than
+copying the SELFIE's pose (already fixed in Round 4) — don't assume
+Round 4's fix covers this; verify against this round's specific
+instruction wording instead.
