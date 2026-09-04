@@ -327,7 +327,17 @@ async function filterByImageContent(
           },
         },
       },
-      max_completion_tokens: 500,
+      // Raised from 500 to 1500 — confirmed live this was too low: a real
+      // production call returned finish_reason "length" with genuinely
+      // empty content, meaning gpt-5.5's internal reasoning over ~12
+      // images consumed the entire budget before any visible JSON output
+      // could be emitted. Same root cause and fix pattern as try-on.ts's
+      // writeTryOnAddendum and generate-image.ts's writeStylingAddendum
+      // (see CLAUDE.md) — gpt-5.5 is a reasoning-model-family model whose
+      // internal reasoning tokens count against this same budget. This
+      // call reasons over MORE images than those two calls reason over
+      // fields, so it needs comparable or more headroom, not less.
+      max_completion_tokens: 1500,
     });
     const raw = completion.choices[0]?.message?.content?.trim();
     if (!raw) {

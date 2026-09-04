@@ -1411,3 +1411,37 @@ photo is ever reported again after this ships, check the
 "Image relevance check rejected mismatched dress photos" info log first
 to see whether the check ran and what it rejected, before assuming the
 vision call itself needs a different prompt.
+
+**Confirmed on the very next production deploy: `filterByImageContent`
+hit the exact same silent/near-silent empty-response bug already fixed
+twice elsewhere in this codebase.** Real Render log:
+`{"finishReason":"length","msg":"Image relevance check returned empty
+content; keeping all candidates"}` — `max_completion_tokens: 500` was too
+low for `gpt-5.5` to reason over ~12 images AND still have room to emit
+the JSON output; reasoning alone hit the ceiling (`finish_reason:
+"length"`), leaving nothing for the actual answer. Because this call
+reasons over an image SET rather than a handful of text fields (unlike
+`writeTryOnAddendum`'s 6 fields or `writeStylingAddendum`'s similar
+count), it plausibly needs more headroom than either of those, not less
+— raised to `max_completion_tokens: 1500`. The failure was at least
+already visible in the log (unlike the original silent-null bug in the
+other two files) because this function was written with the
+`if (!raw) { logger.warn(...) }` pattern from the start, having been
+added after that bug was already known — so the fail-open path did its
+job (the search still returned a full page), it just meant this
+particular check ran with zero effect on this request, and the couple-
+photo it was meant to catch stayed in.
+
+**Any new call site added to this codebase that uses `gpt-5.5` with
+`response_format: json_schema` and asks it to reason over multiple images
+or a non-trivial amount of input should start with a generous
+`max_completion_tokens` (1000+) from the outset, not the smallest number
+that seems sufficient for the visible output alone** — this has now been
+the root cause of empty/failed structured-output calls three separate
+times across three different files in this codebase
+(`writeTryOnAddendum`, `writeStylingAddendum`, `filterByImageContent`).
+Budget for the model's invisible reasoning, not just the JSON it needs to
+print. Verify this fix live (a real couple/group photo actually getting
+rejected) before assuming 1500 is sufficient for every case — this was
+raised based on the `finish_reason: "length"` signal, not a confirmed
+sufficient value from a real successful run.
