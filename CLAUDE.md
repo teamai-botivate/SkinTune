@@ -1132,3 +1132,63 @@ comparison is what found both round 2 and round 3's root causes, and is
 more reliable than guessing at new wording. This was NOT independently
 live-verified with a real photo in this session — if build still drifts
 after this fix, verify live before writing a fourth round from scratch.
+
+**Round 4, a genuinely different failure mode from rounds 1-3: after the
+face/build fixes above, the user reported (with two real side-by-side
+generated results) that the output looked like a literal face cut-paste
+onto a new body — and specifically that the input selfie's flat/neutral/
+off-guard EXPRESSION was being carried straight into the styled shot,
+producing an unflattering result. The user was explicit and emphatic
+about the product intent here: "person same ho but ache se dikhna
+chahiye... same waisa hi expression nhi jaisa wo upload kiya h" (the
+person should be recognizable, but should look GOOD — not simply wearing
+whatever expression happened to be in their casual reference photo).**
+
+Root cause: rounds 2-3's identity-preservation language, in successfully
+fixing face-shape and build drift, had become TOO literal — instructing
+the model to preserve "exact features," "instantly recognizable," and
+match the reference "exactly" gave it no room to distinguish "same
+underlying face" from "same literal photograph." An overly strict
+identity-lock instruction pushed the model toward the path of least
+resistance: copying the face region (expression included) rather than
+genuinely re-rendering this person's likeness under new, natural,
+confident conditions — this is the SAME class of bug documented earlier
+in this file for `generate-image.ts` (an overly strong identity-lock
+instruction suppressing hairstyle changes by association, "Round 3" under
+the Frontend architecture section above) — a strict "don't change this"
+instruction bleeds over onto adjacent things (there, hair; here,
+expression) that were never meant to be locked.
+
+Fix: reworded the identity instructions throughout `try-on.ts` (system
+prompt, opening identity rule, face-feature list, closing reminder) to
+explicitly separate two concepts that had been conflated: (1) matching
+the person's underlying facial STRUCTURE (bone structure, feature shapes,
+proportions — the actual constraint) vs. (2) literally copying the
+photo's pixels/expression/mood (never intended, but what an overly
+literal instruction was pushing toward). New explicit language: "matching
+identity means matching WHO they are, not literally copying pixels...
+never a crop or copy-paste of the input photo's face"; "This is about
+matching their real bone structure and features, not about literally
+transplanting the face pixels from the input photo." The system prompt
+now explicitly names the failure mode by describing the typical input as
+"a casual, off-guard phone selfie — flat lighting, a neutral or tired
+expression, an awkward low angle, not their best moment" and instructs
+the model to NOT carry that mood over, directing "a genuinely confident,
+warm, camera-ready expression... the way a good photographer coaches a
+subject to look their best" instead — framed explicitly around genuine
+photographic quality (this product's established language guideline, see
+`buildFlatteringInstruction`'s original intent elsewhere in this file),
+never around "fixing" the person. The `expression` schema field's
+description was updated the same way.
+
+**This is the second time in this codebase that "preserve identity"
+language, stated too strictly, has suppressed something that was never
+meant to be locked** (hairstyle in `generate-image.ts`'s Round 3, now
+expression in `try-on.ts`'s Round 4). When writing or strengthening an
+identity-preservation instruction anywhere in this codebase, be
+explicit about what "identity" does and does NOT cover — structure/
+features/build, never literal pose, expression, lighting, or mood — or
+a strict-sounding instruction will predictably bleed into suppressing
+those too. Not independently live-verified with a real photo in this
+session — verify live if this exact "cut-paste expression" symptom is
+reported again before writing a fifth round from scratch.
