@@ -461,35 +461,45 @@ const generatingStages = [
   'Lining up your top picks',
 ];
 
-function Generating() {
+function Generating({ error, onRetry, onBack }: { error: string; onRetry: () => void; onBack: () => void }) {
   const [active, setActive] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   useEffect(() => {
+    if (error) return;
     // Cycles through the stage list on repeat (not once-and-stop) so the
-    // screen stays visibly active for the full real generation time —
-    // previously the 4 stages finished in ~2.5s and then sat frozen on the
-    // last one for the remaining ~90s+ of actual work, which read as stuck.
+    // screen stays visibly active for the full real search time — previously
+    // the stages finished in a few seconds and then sat frozen for the rest
+    // of the wait, which read as stuck. Stops advancing once an error is
+    // shown instead — a spinning stage list behind an error reads as broken.
     const stageTimer = window.setInterval(() => setActive((value) => (value + 1) % generatingStages.length), 2600);
     const clockTimer = window.setInterval(() => setElapsedSeconds((value) => value + 1), 1000);
     return () => { window.clearInterval(stageTimer); window.clearInterval(clockTimer); };
-  }, []);
+  }, [error]);
   const minutes = Math.floor(elapsedSeconds / 60);
   const seconds = elapsedSeconds % 60;
   return <div className="noise min-h-[100dvh] bg-background text-foreground"><div className="mx-auto flex min-h-[100dvh] max-w-3xl flex-col justify-center px-6 py-16">
     <div className="mb-14 flex items-center gap-2"><span className="grid size-10 place-items-center rounded-[14px] bg-primary text-primary-foreground"><Sparkles size={19} className="animate-pulse" /></span><span className="font-serif text-2xl">SkinTune</span></div>
     <p className="text-xs font-bold uppercase tracking-[.24em] text-primary">Your personal edit</p>
     <h1 className="mt-5 max-w-xl font-serif text-[clamp(3rem,8vw,6.5rem)] leading-[.88] tracking-[-.05em]">Making room<br />for your <em className="text-primary">point of view.</em></h1>
-    <div className="mt-16 flex max-w-md items-center gap-4" data-testid="text-generating-stage">
-      <span className="relative grid size-9 shrink-0 place-items-center">
-        <span className="absolute inset-0 animate-ping rounded-full bg-primary/40" />
-        <span className="relative grid size-9 place-items-center rounded-full bg-primary text-primary-foreground"><RefreshCw size={16} className="animate-spin" /></span>
-      </span>
-      <span key={active} className="animate-rise text-lg font-semibold">{generatingStages[active]}…</span>
-    </div>
-    <div className="mt-6 h-1.5 max-w-md overflow-hidden rounded-full bg-secondary">
-      <div className="h-full w-1/3 animate-[indeterminate_1.6s_ease-in-out_infinite] rounded-full bg-primary" />
-    </div>
-    <p className="mt-8 flex items-center gap-2 text-xs text-muted-foreground"><Clock3 size={14} /> {elapsedSeconds < 5 ? 'Getting started…' : `${minutes > 0 ? `${minutes}m ` : ''}${seconds}s so far — searching real stores takes a moment.`}</p>
+    {error ? <div className="mt-16 max-w-md animate-rise" data-testid="text-generating-error">
+      <p className="text-sm font-semibold text-destructive">{error}</p>
+      <div className="mt-4 flex flex-wrap gap-3">
+        <button type="button" onClick={onRetry} data-testid="button-retry-search" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-bold text-primary-foreground"><RefreshCw size={15} /> Try again</button>
+        <button type="button" onClick={onBack} data-testid="button-generating-back" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold hover:border-primary/50">Back</button>
+      </div>
+    </div> : <>
+      <div className="mt-16 flex max-w-md items-center gap-4" data-testid="text-generating-stage">
+        <span className="relative grid size-9 shrink-0 place-items-center">
+          <span className="absolute inset-0 animate-ping rounded-full bg-primary/40" />
+          <span className="relative grid size-9 place-items-center rounded-full bg-primary text-primary-foreground"><RefreshCw size={16} className="animate-spin" /></span>
+        </span>
+        <span key={active} className="animate-rise text-lg font-semibold">{generatingStages[active]}…</span>
+      </div>
+      <div className="mt-6 h-1.5 max-w-md overflow-hidden rounded-full bg-secondary">
+        <div className="h-full w-1/3 animate-[indeterminate_1.6s_ease-in-out_infinite] rounded-full bg-primary" />
+      </div>
+      <p className="mt-8 flex items-center gap-2 text-xs text-muted-foreground"><Clock3 size={14} /> {elapsedSeconds < 5 ? 'Getting started…' : `${minutes > 0 ? `${minutes}m ` : ''}${seconds}s so far — searching real stores takes a moment.`}</p>
+    </>}
   </div></div>;
 }
 
@@ -511,8 +521,8 @@ function Home({ profile, savedDresses, onNew, onResults, onSettings, onQuickStar
   </main></div>;
 }
 
-function DressGrid({ profile, dresses, shopLinks, hasMore, loadingMore, onTryOn, onLoadMore, onBack }: {
-  profile: SkinTuneProfile; dresses: DressResult[]; shopLinks: ShopLink[]; hasMore: boolean; loadingMore: boolean;
+function DressGrid({ profile, dresses, shopLinks, hasMore, loadingMore, loadMoreError, onTryOn, onLoadMore, onBack }: {
+  profile: SkinTuneProfile; dresses: DressResult[]; shopLinks: ShopLink[]; hasMore: boolean; loadingMore: boolean; loadMoreError: string;
   onTryOn: (dress: DressResult) => void; onLoadMore: () => void; onBack: () => void;
 }) {
   return <Shell profile={profile} onBack={onBack} onSettings={onBack}><div className="animate-rise">
@@ -529,7 +539,10 @@ function DressGrid({ profile, dresses, shopLinks, hasMore, loadingMore, onTryOn,
         <div className="flex items-center justify-between border-t border-border/70 px-4 py-3"><button type="button" onClick={() => onTryOn(dress)} data-testid={`button-try-on-${dress.id}`} className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-3 py-2 text-xs font-bold text-primary-foreground"><Wand2 size={14} /> Try this on</button></div>
       </article>
     )}</div>
-    {hasMore && <div className="mt-8 flex justify-center"><button type="button" onClick={onLoadMore} disabled={loadingMore} data-testid="button-load-more-dresses" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-6 py-3 text-sm font-bold hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-60">{loadingMore ? <RefreshCw size={15} className="animate-spin" /> : <ChevronDown size={15} />} {loadingMore ? 'Finding more…' : 'More dresses'}</button></div>}
+    {hasMore && <div className="mt-8 flex flex-col items-center gap-2">
+      {loadMoreError && <p className="text-xs font-semibold text-destructive">{loadMoreError}</p>}
+      <button type="button" onClick={onLoadMore} disabled={loadingMore} data-testid="button-load-more-dresses" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-6 py-3 text-sm font-bold hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-60">{loadingMore ? <RefreshCw size={15} className="animate-spin" /> : <ChevronDown size={15} />} {loadingMore ? 'Finding more…' : 'More dresses'}</button>
+    </div>}
     {shopLinks.length > 0 && <div className="mt-14"><p className="text-xs font-bold uppercase tracking-[.18em] text-primary">Shop these online</p><h2 className="mt-2 font-serif text-3xl">More real stores worth a look.</h2>
       <div className="mt-6 grid gap-3 sm:grid-cols-2">{shopLinks.map((link) => <a key={link.url} href={link.url} target="_blank" rel="noreferrer" data-testid={`link-shop-${link.siteName.toLowerCase()}`} className="focus-ring flex items-center justify-between gap-3 rounded-2xl border border-border bg-card p-4 transition hover:-translate-y-0.5 hover:border-primary/45">
         <span className="min-w-0"><span className="block truncate font-semibold">{link.title}</span><span className="text-xs font-bold uppercase tracking-[.1em] text-muted-foreground">{link.siteName}</span></span>
@@ -605,6 +618,9 @@ function SkinTune() {
   const [tryOnImageUrl, setTryOnImageUrl] = useState('');
   const [tryOnLoading, setTryOnLoading] = useState(false);
   const [tryOnError, setTryOnError] = useState('');
+  const [searchError, setSearchError] = useState('');
+  const [searchAttempt, setSearchAttempt] = useState(0);
+  const [loadMoreError, setLoadMoreError] = useState('');
 
   const update = (patch: Partial<SkinTuneProfile>) => setProfile((old) => ({ ...old, ...patch }));
   const index = wizardScreens.indexOf(screen);
@@ -628,16 +644,23 @@ function SkinTune() {
   useEffect(() => {
     if (screen !== 'generating') return;
     let active = true;
-    searchDresses(profile, 0, DRESS_PAGE_SIZE).then((page) => {
-      if (!active) return;
-      setDresses(page.results);
-      setShopLinks(page.shopLinks);
-      setHasMoreDresses(page.hasMore);
-      go('dresses');
-    });
+    setSearchError('');
+    searchDresses(profile, 0, DRESS_PAGE_SIZE)
+      .then((page) => {
+        if (!active) return;
+        setDresses(page.results);
+        setShopLinks(page.shopLinks);
+        setHasMoreDresses(page.hasMore);
+        go('dresses');
+      })
+      .catch((err) => {
+        if (!active) return;
+        console.warn('Dress search failed:', err);
+        setSearchError('We couldn’t reach real stores just now. This is usually temporary — please try again in a moment.');
+      });
     return () => { active = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: search begins once per entry into this screen
-  }, [screen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: search begins once per entry into this screen (searchAttempt bumps to retry)
+  }, [screen, searchAttempt]);
 
   useEffect(() => { localStorage.setItem('skintune-saved-looks', JSON.stringify(savedDresses)); }, [savedDresses]);
 
@@ -647,14 +670,16 @@ function SkinTune() {
   if (screen === 'home') return <Home profile={profile} savedDresses={savedDresses} onNew={() => { update({ photoUrl: '' }); go('name'); }} onResults={() => go(dresses.length ? 'dresses' : 'generating')} onSettings={openSettings} onQuickStart={(occasion) => { update({ occasion }); go('final-prefs'); }} />;
   if (screen === 'settings') return <Settings profile={profile} deletedNotice={deletedNotice} onBack={() => go(profile.name ? 'home' : 'welcome')} onDelete={() => { localStorage.removeItem('skintune-profile'); localStorage.removeItem('skintune-saved-looks'); localStorage.removeItem('skintune-feedback'); setProfile(initialProfile); setDeletedNotice(true); setTimeout(() => go('welcome'), 900); }} />;
   if (screen === 'photo') return <PhotoPanel profile={profile} update={update} onContinue={() => go('appearance')} onBack={back} />;
-  if (screen === 'dresses') return <DressGrid profile={profile} dresses={dresses} shopLinks={shopLinks} hasMore={hasMoreDresses} loadingMore={loadingMoreDresses} onTryOn={runTryOn} onLoadMore={() => {
+  if (screen === 'dresses') return <DressGrid profile={profile} dresses={dresses} shopLinks={shopLinks} hasMore={hasMoreDresses} loadingMore={loadingMoreDresses} loadMoreError={loadMoreError} onTryOn={runTryOn} onLoadMore={() => {
     setLoadingMoreDresses(true);
+    setLoadMoreError('');
     searchDresses(profile, dresses.length, DRESS_PAGE_SIZE)
       .then((page) => { setDresses((old) => [...old, ...page.results]); setHasMoreDresses(page.hasMore); })
+      .catch((err) => { console.warn('Load more dresses failed:', err); setLoadMoreError('Couldn’t load more just now — please try again.'); })
       .finally(() => setLoadingMoreDresses(false));
   }} onBack={() => go('home')} />;
   if (screen === 'try-on' && selectedDress) return <TryOn dress={selectedDress} profile={profile} imageUrl={tryOnImageUrl} loading={tryOnLoading} error={tryOnError} saved={isDressSaved(selectedDress.id)} onSave={() => setSavedDresses((old) => isDressSaved(selectedDress.id) ? old.filter((item) => item.dress.id !== selectedDress.id) : [...old, { dress: selectedDress, imageUrl: tryOnImageUrl }])} onBack={back} onTryAnother={() => go('dresses')} onRetry={() => runTryOn(selectedDress)} />;
-  if (screen === 'generating') return <Generating />;
+  if (screen === 'generating') return <Generating error={searchError} onRetry={() => setSearchAttempt((v) => v + 1)} onBack={() => go(profile.name ? 'home' : 'welcome')} />;
 
   const screenContent: Record<string, ReactNode> = {
     name: <NameStep profile={profile} update={update} onNext={() => go('profile')} onBack={back} />,

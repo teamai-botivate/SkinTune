@@ -813,6 +813,30 @@ Without it, `/api/search-dresses` returns a clear 502; there is no mock
 fallback for dress search the way other routes fall back to static mock
 data, since there's no meaningful "mock real dress" to show.
 
+**Tavily free/dev-tier keys have a monthly usage cap — a real production
+issue, not a code bug.** Hit in this exact deployment: Render logs showed
+`Tavily search failed: 432 {"detail":{"error":"This request exceeds your
+plan's set usage limit..."}}`. Fix is on Tavily's dashboard (upgrade the
+plan, or wait for the next billing cycle), not in this codebase — but see
+the next paragraph for a real code bug this surfaced.
+
+**The `Generating` screen used to hang forever with no feedback if the
+search call failed** (e.g. this exact Tavily 432, or any other
+`/api/search-dresses` error) — the effect that calls `searchDresses` had a
+`.then()` but no `.catch()`, so a rejected promise just left the user
+staring at the animated "Searching real stores…" screen indefinitely, with
+only a silent console error and an uncaught-promise warning to show for it
+(confirmed via a real Render deployment + browser console during the
+Tavily-limit incident above). Fixed: the search effect now has a
+`.catch()` that sets a `searchError` message, `Generating` renders a
+distinct error state (message + "Try again" re-triggering the search via a
+`searchAttempt` counter + "Back") instead of the spinner, and the
+"More dresses" button on `DressGrid` got the same treatment
+(`loadMoreError`, shown inline above the button) since it had an identical
+silent-failure gap. Any future call added to this screen's loading effect
+must have an explicit `.catch()` — a bare `.then()` on a screen with no
+other feedback mechanism reads as the app being stuck, not as an error.
+
 Verified live (this branch): ran real `/api/search-dresses` calls against
 the real Tavily API with both a women's ("red, elegant, wedding guest,
 mid-range") and a men's ("navy, classic, office, mid-range") profile —
