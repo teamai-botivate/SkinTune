@@ -1017,3 +1017,75 @@ branch: first confirm what `RECOMMENDATION_MODEL`/`OPENAI_TEXT_MODEL` is
 actually set to before assuming account verification is needed — this has
 now been root-caused once already to a model-specific gap that a simple
 model swap fixed with zero account-level action required.
+
+**Render's `OPENAI_TEXT_MODEL` environment variable was itself set to
+`gpt-4o`, silently overriding the code fix above.** After the gpt-5.5
+default was deployed, production logs kept showing the exact same 403 —
+line numbers in the stack trace had shifted (confirming the new code WAS
+live), but the model name in the error was still `gpt-4o`. Root cause:
+`openai-client.ts`'s `RECOMMENDATION_MODEL` reads
+`process.env["OPENAI_TEXT_MODEL"] ?? "gpt-5.5"` — the env var, when set,
+always wins over the code default. Render had this var explicitly
+configured to `gpt-4o` from before this fix existed. This is a general
+trap worth remembering: **an env-var override can silently defeat a code
+default's fix. When a fix changes a default value that has a
+corresponding env var, check the deployment's actual environment
+variables, not just the deployed code, if the fix doesn't appear to take
+effect.** Once the user removed/updated `OPENAI_TEXT_MODEL` on Render, the
+403 stopped appearing in subsequent logs immediately (confirmed by the
+absence of "403|verified" in the next several `/api/try-on` requests).
+
+**Follow-up, immediately after the gpt-4o fix actually took effect: a
+real try-on image came back with a visibly different face than the user's
+uploaded photo** — different hairstyle, fuller/rounder face shape,
+different apparent build — reported directly by the user with both images
+side by side. This was NOT a model-verification issue (confirmed no 403
+in that request's logs) — it was a genuine identity-preservation prompt
+gap in `try-on.ts`, found by comparing it against `generate-image.ts`'s
+already-fixed prompt: `generate-image.ts`'s doc comment (see near the top
+of that file) explicitly documents that **waist-up/portrait framing
+instead of full-length was the key mitigation** for identity drift in
+image edits — but on inspection, neither `generate-image.ts` NOR
+`try-on.ts` actually contained that instruction anywhere in the real
+prompt text sent to the model. It existed only as a code comment
+describing a mitigation that was apparently never implemented (or was
+removed at some point without updating the comment) — the prompt itself
+never told the model to use waist-up framing.
+
+The direct fix (full waist-up crop) was deliberately NOT taken here: this
+product's core purpose is showing a complete outfit (including bottoms/
+footwear), so cropping to waist-up would hide most of what the user
+actually came to see. Per explicit user decision, `try-on.ts`'s prompt
+was changed to keep full-length framing but compensate with much more
+aggressive identity-preservation instructions instead of relying on a
+tighter crop:
+- The identity rule was moved to the very front of the prompt and stated
+  as a hard, non-negotiable constraint that overrides every other
+  instruction if they ever conflict (previously it was one clause among
+  several in a longer opening sentence).
+- Added an entirely new, itemized instruction listing the SPECIFIC facial
+  features to preserve — face shape, jawline, eyebrow shape, eye shape,
+  nose shape, mouth shape, exact facial hair style/density/pattern, skin
+  tone, hairline — explicitly telling the model not to generate "a
+  generic or idealized face that merely resembles this person" but to
+  reproduce their actual specific features. The reasoning documented
+  inline: since framing can't be pulled in tighter to reduce
+  transformation size (the product needs the full outfit visible), the
+  compensating lever is maximal specificity about which features must
+  transfer, rather than a vaguer "keep the same face" instruction alone.
+- Added an explicit "frame as full-length, do not crop to waist-up"
+  instruction — so this is now a deliberate, stated choice in the prompt
+  rather than an accidental gap where neither framing approach was ever
+  actually requested.
+- Strengthened the closing reminder to explicitly ask the model to check
+  the output face against the reference photo before finishing.
+
+This was NOT independently live-verified with a real photo in this
+session (the fix followed directly from a live-reported real-world
+failure, but the strengthened prompt itself was not re-tested against
+that same photo before this note was written) — if this exact symptom
+(different face/hair/build than the input) is reported again after this
+fix, verify with a real photo through the actual `/api/try-on` route
+before assuming the strengthened wording was sufficient; full-length
+framing is a genuinely harder identity-preservation problem than a
+waist-up crop would be, and this fix is a mitigation, not a guarantee.

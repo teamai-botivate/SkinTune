@@ -106,12 +106,30 @@ async function writeTryOnAddendum(
 
 function buildTryOnPrompt(dress: DressResult, addendum: TryOnAddendum | null): string {
   const parts = [
-    `This is a photo of a real specific person, shown alongside a real product photo of a dress/outfit ("${dress.title}"). The ONLY thing that must never change is WHO this person is: their face, facial structure, and skin tone must stay recognizably this exact same person. Everything else — hairstyle, expression, pose, body language, background — is yours to change as much as needed for the best result. Preserving identity is not the same as preserving the original photo; you are re-styling this person for a new shoot, not lightly editing their existing photo.`,
+    `This is a photo of a real specific person, shown alongside a real product photo of a dress/outfit ("${dress.title}"). The single most important rule: the output MUST show the EXACT SAME PERSON as the first reference photo — same face, same facial features, same skin tone, same identity, instantly recognizable as the same individual. This is a hard, non-negotiable constraint that overrides every other instruction in this prompt if they ever conflict. Everything else — hairstyle, expression, pose, body language, background — is yours to change as much as needed for the best result. Preserving identity is not the same as preserving the original photo; you are re-styling this person for a new shoot, not lightly editing their existing photo.`,
+    // Explicit, itemized face-feature preservation — full-length framing
+    // (required here, see below, so the whole garment stays visible) is a
+    // BIGGER transformation from a typical selfie than a waist-up crop
+    // would be, which empirically makes the model more likely to
+    // "reinterpret" the face. Since framing can't be pulled in to
+    // compensate (the product needs the full outfit visible), the
+    // mitigation instead is to be maximally explicit about which exact
+    // facial features must transfer, rather than relying on a vaguer
+    // "keep the same face" instruction alone.
+    "Look closely at the first reference photo and preserve these exact features on the output face: the precise face shape and jawline, eyebrow shape and thickness, eye shape and spacing, nose shape, mouth/lip shape, any facial hair (exact style, density, and pattern — moustache, beard, stubble, or clean-shaven, matching exactly what's in the photo), skin tone and any visible skin texture or marks, and hairline. Do not generate a generic or idealized face that merely resembles this person — reproduce their actual specific features.",
     // Anti "cut-paste face" instruction, ported from generate-image.ts —
     // the failure mode this guards against is visibly distinct from
     // ordinary identity drift: the face reads as pasted onto a different
     // pose/lighting/body rather than photographed as one coherent scene.
     "The face must be seamlessly and naturally part of the new photo — matching the new lighting, angle, and skin tone rendering of the rest of the scene. It must never look like a face cut out and pasted onto a different body or pose; the neck, jaw, hairline, and shoulders must blend continuously into the body below with consistent lighting and perspective, as if this is one single photograph taken in one moment, not a composite of the original photo with a new outfit glued on.",
+    // Full-length framing is required (not waist-up) because the product
+    // needs the complete garment visible, including bottoms/footwear —
+    // cropping to waist-up would hide most of the outfit and defeat the
+    // point of a try-on. This is a deliberate trade-off: full-length is a
+    // bigger transformation from a typical selfie and empirically carries
+    // more identity-drift risk than a tighter crop would, which is why the
+    // face-feature instructions above are unusually explicit to compensate.
+    "Frame this as a full-length shot showing the complete outfit from head to shoes — the whole garment, including any bottoms and footwear, must be visible in the frame. Do not crop to a waist-up or close-up portrait; the point of this photo is to show the full look.",
     "Dress this exact person in the exact garment shown in the second reference image — match its actual cut, colour, pattern, and details faithfully, not a generic approximation.",
     "The garment must fit this exact person's actual body correctly: drape, sit, and follow their real proportions as if properly worn, not pasted on or floating away from the body.",
     addendum
@@ -121,7 +139,7 @@ function buildTryOnPrompt(dress: DressResult, addendum: TryOnAddendum | null): s
       ? `Pose, expression, and setting for this shot (decided by studying this exact person and this exact garment together, and deliberately different from a plain reproduction of the input photo's own pose/expression): Facial expression: ${addendum.expression} Head and camera angle: ${addendum.headAndCameraAngle} Body language and pose: ${addendum.bodyLanguage} Background/setting: ${addendum.environmentAndSetting} Fit: ${addendum.fitNotes}`
       : "Compose this as one natural, well-lit, coherent photograph with a pose, expression, and setting genuinely different from the input photo's own — a new shoot, not a copy of the original.",
     "Natural lighting, tasteful and supportive, no beauty filter, no visible text or watermark. Professional editorial photo quality, the kind of natural, well-composed photo you'd see in a stylish social-media outfit post — not a stiff studio ID photo, and not a barely-modified copy of the input selfie.",
-    "Reminder: keep the same face and identity as the input photo, seamlessly integrated into the new scene (not pasted-looking) — but hairstyle, expression, pose, and background must all change as directed above, confidently and visibly, to give the best possible result showing this exact garment on this exact person. This is a full re-styling for a new photograph, not a light touch-up of the original.",
+    "Final reminder, the most important rule in this entire prompt: the output face must be unmistakably the SAME PERSON as the first reference photo — same face shape, same features, same facial hair, same skin tone. Look at the first reference photo again before finishing and check the output face genuinely matches it. Seamlessly integrated into the new scene (not pasted-looking), full-length framing with the complete outfit visible — but hairstyle, expression, pose, and background must all change as directed above, confidently and visibly, to give the best possible result showing this exact garment on this exact person. This is a full re-styling for a new photograph, not a light touch-up of the original.",
   ];
   return parts.filter(Boolean).join(" ");
 }
