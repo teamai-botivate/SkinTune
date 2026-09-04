@@ -167,12 +167,13 @@ function extractPrice(content: string): string | undefined {
  * data-availability gap in what Tavily has indexed for that query, not a
  * pairing bug in this function — verify with a live query first.
  */
-function buildDressCards(images: TavilyImage[], limit: number, idOffset: number): DressResult[] {
+function buildDressCards(images: TavilyImage[], profile: SkinTuneProfile, limit: number, idOffset: number): DressResult[] {
   const cards: DressResult[] = [];
   for (const image of images) {
     if (cards.length >= limit) break;
     const host = hostnameOf(image.url);
     if (!host) continue;
+    if (image.title && !isRelevantToProfile(image.title, image.description, profile)) continue;
     const domain = retailerDomainOf(host);
     cards.push({
       id: `dress-${idOffset + cards.length + 1}`,
@@ -186,18 +187,68 @@ function buildDressCards(images: TavilyImage[], limit: number, idOffset: number)
 }
 
 /**
+ * Filters out results that are clearly off-topic for a clothing search,
+ * even though they matched the colour/occasion keywords — a real,
+ * live-reported problem: a men's-profile "terracotta wedding" query
+ * surfaced a women's bridal lehenga colour guide and a terracotta
+ * pottery/gifts listing in "Shop these online", because those pages
+ * genuinely contain the words "terracotta" and "wedding" without being
+ * clothing for this person at all. This checks BOTH title and content
+ * snippet (title alone missed cases where the mismatch only showed up in
+ * the description) for two things: (1) an explicit mention of the
+ * opposite gender's clothing when the profile states a gender, and (2)
+ * clearly non-clothing product categories (gifts, home decor, pottery,
+ * accessories-only listings) that colour/theme keywords can accidentally
+ * match. This is a relevance filter on real search results, not a
+ * styling decision — it doesn't invent or prefer any specific product.
+ */
+function isRelevantToProfile(title: string, content: string | undefined, profile: SkinTuneProfile): boolean {
+  const text = `${title} ${content ?? ""}`.toLowerCase();
+  const normalizedPronouns = profile.pronouns.toLowerCase();
+
+  const nonClothingCategories = [
+    "pottery",
+    "gift set",
+    "wedding gift",
+    "home decor",
+    "home décor",
+    "wall art",
+    "showpiece",
+    "figurine",
+    "candle",
+    "vase",
+    "mug",
+    "cup set",
+    "dinnerware",
+    "kitchenware",
+  ];
+  if (nonClothingCategories.some((term) => text.includes(term))) return false;
+
+  if (normalizedPronouns.includes("men") && !normalizedPronouns.includes("women")) {
+    const womenOnlyTerms = ["lehenga", "saree", "sari", "women's dress", "bridal makeup", "her wedding"];
+    if (womenOnlyTerms.some((term) => text.includes(term))) return false;
+  }
+  if (normalizedPronouns.includes("women") && !normalizedPronouns.includes("men")) {
+    const menOnlyTerms = ["men's suit", "men's blazer", "groom's sherwani", "his wedding"];
+    if (menOnlyTerms.some((term) => text.includes(term))) return false;
+  }
+  return true;
+}
+
+/**
  * Builds the general "shop these online" links from Tavily's results[] —
  * real store category/search page URLs, each with a price when the page
  * snippet happened to contain one. Not tied to any specific dress photo
  * above; see this file's module doc comment.
  */
-function buildShopLinks(results: TavilyResult[], limit: number): ShopLink[] {
+function buildShopLinks(results: TavilyResult[], profile: SkinTuneProfile, limit: number): ShopLink[] {
   const links: ShopLink[] = [];
   const seenHosts = new Set<string>();
   for (const result of results) {
     if (links.length >= limit) break;
     const host = hostnameOf(result.url);
     if (!host || seenHosts.has(host)) continue;
+    if (!isRelevantToProfile(result.title, result.content, profile)) continue;
     seenHosts.add(host);
     links.push({
       title: result.title,
@@ -253,7 +304,7 @@ router.post("/search-dresses", async (req, res) => {
         continue;
       }
       const { images, results } = outcome.value;
-      perTaskCards.push(buildDressCards(images, perTaskLimit, 0));
+      perTaskCards.push(buildDressCards(images, profile, perTaskLimit, 0));
       allResults.push(...results);
     }
 
@@ -271,7 +322,7 @@ router.post("/search-dresses", async (req, res) => {
       merged.push(dress);
     }
     const dresses: DressResult[] = merged.map((dress, i) => ({ ...dress, id: `dress-${offset + i + 1}` }));
-    const shopLinks = buildShopLinks(allResults, 8);
+    const shopLinks = buildShopLinks(allResults, profile, 8);
 
     if (dresses.length === 0) {
       throw new Error("No real dress results found across any site for this search — every per-site task returned nothing usable.");

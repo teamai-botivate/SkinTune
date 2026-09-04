@@ -1338,3 +1338,38 @@ Round 6) to confirm the agent's decision was actually good, then inspect
 whether that specific field's now-individual instruction in
 `buildTryOnPrompt` needs to be even more forceful, rather than assuming
 the agent needs another prompt change.
+
+### `search-dresses.ts`: off-topic results in "Shop these online"
+
+Reported live with real screenshots: a men's profile searching for a
+terracotta wedding suit got, alongside genuine men's suits, a women's
+bridal lehenga colour guide and a terracotta pottery/wedding-gifts
+listing in the `shopLinks` section. Root cause: `buildShopLinks` (and,
+preventatively, `buildDressCards`) had zero relevance filtering on
+Tavily's `results[]`/`images[]` beyond de-duplicating by hostname — a
+page or image matching the colour/occasion keywords (e.g. "terracotta",
+"wedding") but belonging to a completely different product category or
+gender still passed straight through, since nothing ever checked the
+actual content against the profile.
+
+Fix: `isRelevantToProfile(title, content, profile)` checks both the
+title AND the content/description snippet (title alone would miss cases
+where the mismatch only showed up in the description — this was
+explicitly the user's concern) for two things: (1) explicit opposite-
+gender clothing terms when the profile states a gender (e.g. "lehenga",
+"saree", "bridal makeup" filtered out for a men's profile; "men's suit",
+"groom's sherwani" filtered out for a women's profile), and (2) clearly
+non-clothing categories that colour/theme keywords can accidentally
+match (pottery, gift sets, home decor, dinnerware, etc.). This is a
+relevance FILTER on real results, not a styling decision or a
+product-category invention — it removes genuinely off-topic matches, it
+doesn't prefer or rank anything. Applied to both `buildShopLinks` (both
+title and content available) and `buildDressCards` (only the image's own
+title/description available, so content is optional there).
+
+Verified live against the real Tavily API: a men's profile's shopLinks
+went from including a bridal-lehenga guide and a pottery-gifts listing to
+6 genuinely relevant results (men's suits, a men's boutonniere, a men's
+wedding-suit category page); a women's profile's results were checked
+afterward too and came back unaffected (no genuine dresses/gowns were
+incorrectly filtered out), confirming the filter isn't over-aggressive.
