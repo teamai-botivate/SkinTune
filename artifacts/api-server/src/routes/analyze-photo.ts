@@ -45,7 +45,7 @@ router.post("/analyze-photo", async (req, res) => {
   try {
     const openai = getOpenAIClient();
     const completion = await openai.chat.completions.create({
-      model: RECOMMENDATION_MODEL, // gpt-4o supports vision input
+      model: RECOMMENDATION_MODEL, // supports vision input — see openai-client.ts for why this defaults to gpt-5.5, not gpt-4o
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         {
@@ -78,8 +78,18 @@ router.post("/analyze-photo", async (req, res) => {
           },
         },
       },
-      temperature: 0.3,
-      max_tokens: 300,
+      // No `temperature` override — confirmed live that gpt-5.5 (this
+      // codebase's default text/vision model, see openai-client.ts)
+      // rejects any non-default temperature with a 400 ("Only the default
+      // (1) value is supported"), a reasoning-model-family behavior. Do
+      // not re-add a temperature override without re-verifying against
+      // whatever model is configured at the time.
+      // max_completion_tokens, not max_tokens — confirmed live that gpt-5.5
+      // (this codebase's default text/vision model, see openai-client.ts)
+      // rejects the older max_tokens param with a 400 ("Unsupported
+      // parameter"). Do not revert to max_tokens without re-verifying
+      // against whatever model is configured at the time.
+      max_completion_tokens: 300,
     });
 
     const raw = completion.choices[0]?.message?.content;

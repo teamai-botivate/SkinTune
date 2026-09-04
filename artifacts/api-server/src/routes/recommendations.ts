@@ -127,7 +127,11 @@ router.post("/recommendations", async (req, res) => {
           schema: RESPONSE_JSON_SCHEMA,
         },
       },
-      temperature: 0.9,
+      // No `temperature` override — confirmed live that gpt-5.5 (this
+      // codebase's default text model, see openai-client.ts) rejects any
+      // non-default temperature with a 400 ("Only the default (1) value is
+      // supported"). Do not re-add one without re-verifying against
+      // whatever model is configured at the time.
     });
 
     const raw = completion.choices[0]?.message?.content;

@@ -22,5 +22,16 @@ export function getOpenAIClient(): OpenAI {
   return client;
 }
 
-export const RECOMMENDATION_MODEL = process.env["OPENAI_TEXT_MODEL"] ?? "gpt-4o";
+// gpt-4o specifically requires OpenAI organization verification when used
+// via the Responses API's image_generation tool (see try-on.ts/
+// generate-image.ts) — confirmed live: a direct API call with model:
+// "gpt-4o" returned a 403 "organization must be verified" error on this
+// exact account, while the identical call with model: "gpt-5.5" succeeded
+// immediately, no verification needed. gpt-5.5 supports everything this
+// codebase needs from a text/vision model (image input, structured JSON
+// outputs, function calling), so it's the default here instead of gpt-4o.
+// If this is ever changed back to gpt-4o (or another model), re-verify
+// against the live API first — this exact model-specific gap was the root
+// cause of a real, repeated production issue, not a hypothetical.
+export const RECOMMENDATION_MODEL = process.env["OPENAI_TEXT_MODEL"] ?? "gpt-5.5";
 export const IMAGE_MODEL = process.env["OPENAI_IMAGE_MODEL"] ?? "gpt-image-2";

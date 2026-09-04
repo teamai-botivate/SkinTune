@@ -65,7 +65,7 @@ Picking a dress and disliking the try-on costs nothing — "Not this one — try
 
 ### The AI and search are already connected
 
-`artifacts/api-server/src/routes/search-dresses.ts` and `.../try-on.ts` hold the Tavily and OpenAI calls for this branch's flow (`.../analyze-photo.ts` is unchanged; `.../recommendations.ts`, `.../generate-image.ts`, and `.../refine-image.ts` are the prior AI-generated-look routes, left in place but unreachable from this branch's frontend). Set `TAVILY_API_KEY` and `OPENAI_API_KEY` (see `artifacts/api-server/.env.example`) to enable them — locally, or as Render environment variables in production. `OPENAI_TEXT_MODEL` (default `gpt-4o`) and `OPENAI_IMAGE_MODEL` (default `gpt-image-2`) are overridable if you want to point at different models later.
+`artifacts/api-server/src/routes/search-dresses.ts` and `.../try-on.ts` hold the Tavily and OpenAI calls for this branch's flow (`.../analyze-photo.ts` is unchanged; `.../recommendations.ts`, `.../generate-image.ts`, and `.../refine-image.ts` are the prior AI-generated-look routes, left in place but unreachable from this branch's frontend). Set `TAVILY_API_KEY` and `OPENAI_API_KEY` (see `artifacts/api-server/.env.example`) to enable them — locally, or as Render environment variables in production. `OPENAI_TEXT_MODEL` (default `gpt-5.5` — see CLAUDE.md for why `gpt-4o` specifically hits an organization-verification 403 via the Responses API's image_generation tool on some accounts, confirmed live, while `gpt-5.5` doesn't) and `OPENAI_IMAGE_MODEL` (default `gpt-image-2`) are overridable if you want to point at different models later.
 
 ## Continuing the project
 

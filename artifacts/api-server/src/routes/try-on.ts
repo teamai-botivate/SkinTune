@@ -87,8 +87,11 @@ async function writeTryOnAddendum(
           schema: TRY_ON_ADDENDUM_JSON_SCHEMA,
         },
       },
-      temperature: 0.9,
-      max_tokens: 400,
+      // No `temperature` override — see analyze-photo.ts's comment on the
+      // same param; gpt-5.5 only supports the default value.
+      // max_completion_tokens, not max_tokens — see analyze-photo.ts's
+      // comment on the same param; gpt-5.5 rejects the older name.
+      max_completion_tokens: 400,
     });
     const raw = completion.choices[0]?.message?.content?.trim();
     if (!raw) return null;

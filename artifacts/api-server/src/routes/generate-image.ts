@@ -242,8 +242,11 @@ async function writeStylingAddendum(
           schema: STYLING_ADDENDUM_JSON_SCHEMA,
         },
       },
-      temperature: 0.9,
-      max_tokens: 500,
+      // No `temperature` override — see analyze-photo.ts's comment on the
+      // same param; gpt-5.5 only supports the default value.
+      // max_completion_tokens, not max_tokens — see analyze-photo.ts's
+      // comment on the same param; gpt-5.5 rejects the older name.
+      max_completion_tokens: 500,
     });
     const raw = completion.choices[0]?.message?.content?.trim();
     if (!raw) return null;
@@ -264,11 +267,16 @@ async function writeStylingAddendum(
  * the input image skips any downscaling before the model sees the photo;
  * quality: 'high' on the output tool improves fidelity further.
  *
- * Requires the OpenAI organization to be "Verified" (platform.openai.com ->
- * Settings -> Organization) to call gpt-4o (or similar) via the Responses
- * API with the image_generation tool — an unverified org gets a 403. If
- * that happens (or any other failure), the caller falls back to
- * editViaImagesEdit below rather than failing the whole request.
+ * Some mainline models require the OpenAI organization to be "Verified"
+ * (platform.openai.com -> Settings -> Organization) to be used via the
+ * Responses API with the image_generation tool — confirmed live that
+ * `gpt-4o` specifically hits a 403 for this on an otherwise-working
+ * account/key, while `gpt-5.5` (this file's RECOMMENDATION_MODEL default,
+ * see openai-client.ts) does not require verification and works
+ * immediately. If that changes, or a 403 shows up again, the caller falls
+ * back to editViaImagesEdit below rather than failing the whole request —
+ * but check which model is actually configured first, since this has now
+ * been a real, verified model-specific gap, not just an account state.
  */
 async function editViaResponsesApi(
   openai: ReturnType<typeof getOpenAIClient>,

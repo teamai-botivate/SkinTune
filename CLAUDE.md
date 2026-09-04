@@ -478,7 +478,9 @@ of how many looks there are or how large any single image comes out.
 `OPENAI_API_KEY` (see `src/lib/openai-client.ts`). It is never sent to or
 readable from the browser — the frontend only ever calls same-origin
 `/api/recommendations`, `/api/generate-image`, and `/api/analyze-photo`.
-Model names are overridable via `OPENAI_TEXT_MODEL` (default `gpt-4o`) and
+Model names are overridable via `OPENAI_TEXT_MODEL` (default `gpt-5.5` on
+the `real-dress-search` branch — see the dedicated note in that branch's
+section below for why; still `gpt-4o` on `main` as of this writing) and
 `OPENAI_IMAGE_MODEL` (default `gpt-image-2`).
 
 ### `src/services/photo-analysis.ts`
@@ -949,3 +951,69 @@ faithful port of already-verified wording, not a new untested idea, but
 if this symptom is ever reported again, verify with a real photo +
 real dress through the actual route before assuming the port was
 faithful enough; do not re-derive the fix from scratch a third time.
+
+**Follow-up bug 3, actually resolved: the `gpt-4o` organization-verification
+403 was NOT an account-verification problem — it was a model-specific gap,
+confirmed live with a working, already-set-up API key.** Earlier notes in
+this file (and in the user-facing debugging session) assumed the fix was
+"the user needs to complete OpenAI org verification." That assumption was
+wrong. Direct API testing against `https://api.openai.com/v1/responses`
+with the exact same account/key, same `image_generation` tool, same
+payload shape — only the `model` field changed — showed:
+- `model: "gpt-4o"` → `403 Your organization must be verified...`
+- `model: "gpt-5.5"` → succeeded immediately, real image returned, on an
+  account that had NEVER completed org verification.
+
+So the 403 is scoped to `gpt-4o` specifically when used as the Responses
+API orchestrator with the `image_generation` tool, not to the account as a
+whole — this contradicts OpenAI's own documentation, which states
+verification is tied to the underlying GPT Image model (`gpt-image-2`)
+regardless of orchestrator, but the live behavior on this account said
+otherwise. **Trust a live API test over vendor documentation when they
+disagree; this is exactly that case.**
+
+Fix: `openai-client.ts`'s `RECOMMENDATION_MODEL` default changed from
+`gpt-4o` to `gpt-5.5` on this branch (env-overridable via
+`OPENAI_TEXT_MODEL`, unchanged). This model is used everywhere a text/
+vision OpenAI call happens in this codebase (`recommendations.ts`,
+`analyze-photo.ts`, `generate-image.ts`'s and `try-on.ts`'s addendum
+agents, and both files' Responses API orchestration calls) — switching the
+one shared constant fixed all of them at once, no per-file model literals
+existed to hunt down.
+
+**Two more real, live-discovered API differences had to be fixed
+alongside the model swap — gpt-5.5 is a stricter/newer model family and
+rejects parameters gpt-4o silently accepted:**
+1. `max_tokens` is rejected with a 400 ("Unsupported parameter... Use
+   `max_completion_tokens` instead"). Fixed in all three places it was
+   used (`analyze-photo.ts`, `generate-image.ts`, `try-on.ts`).
+2. Any non-default `temperature` is rejected with a 400 ("Only the
+   default (1) value is supported") — a reasoning-model-family behavior.
+   Removed the `temperature` override from all four call sites
+   (`recommendations.ts`, `analyze-photo.ts`, `generate-image.ts`,
+   `try-on.ts`); these calls now run at the model's default temperature.
+   This does mean the "raise temperature to reduce convergence toward one
+   safe answer" lever documented earlier in this file (see the
+   vibe/personaEnergy and pose-agent history above) is no longer available
+   as a tuning knob on this branch — if repetitive/generic outputs are
+   ever reported again, that specific fix mechanism is gone; look for
+   another lever (e.g. sibling-awareness, which is unaffected) rather than
+   trying to re-add a temperature override that will 400.
+
+**Verified live, end-to-end, with a real (working) API key, after all
+three fixes together**: `/api/analyze-photo` returned a real structured
+result (`{"status":"good","skinTone":"Light","undertone":"Warm",
+"confidence":90,"contrast":"High"}`), and a full `/api/try-on` call
+(synthetic person photo + a real dress product image URL) completed via
+the PRIMARY Responses API path — no 403, no fallback-to-images.edit
+triggered, confirmed by grepping the server log for
+"403|verified|error|falling back" and finding nothing. This is the
+strongest verification this file's fixes have had: not just "the code
+compiles" but a real request through the real route against the real
+OpenAI API succeeding on the primary, best-quality path.
+
+If a 403 on organization verification is ever reported again on this
+branch: first confirm what `RECOMMENDATION_MODEL`/`OPENAI_TEXT_MODEL` is
+actually set to before assuming account verification is needed — this has
+now been root-caused once already to a model-specific gap that a simple
+model swap fixed with zero account-level action required.
