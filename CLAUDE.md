@@ -1631,3 +1631,53 @@ whether `filterByImageContent`'s `max_completion_tokens: 1500` budget is
 being exhausted the same way it already was once before (see the
 `finish_reason: "length"` root cause documented earlier in this file)
 rather than assuming the prompt wording itself needs another rewrite.
+
+### `try-on.ts`: proactive line-by-line diff against `generate-image.ts` found a missing field
+
+Per this file's own established recommendation ("before trusting any
+single fix on this route as complete, do a line-by-line diff against
+`generate-image.ts`'s `buildLookEditPrompt`/`writeStylingAddendum`"), this
+diff was done proactively (no new live bug report) and found one real
+gap: `generate-image.ts`'s `StylingAddendum` has a `flatteringDirection`
+field — concrete, non-generic reasoning about what makes THIS specific
+person look their best in THIS specific look, added in that file's own
+Round 4 fix — but `try-on.ts`'s `TryOnAddendum` had no equivalent field at
+all. Without it, the try-on addendum agent was only ever asked to decide
+mechanics (expression, angle, body language, fit, setting, hair) and never
+explicitly asked to reason about what would make this specific person
+look genuinely great in this specific garment — the same gap
+`flatteringDirection` was added to close on the other file.
+
+Fix: added `flatteringDirection` to `TryOnAddendum` (same schema
+description pattern as `generate-image.ts`'s field, adapted for a garment
++ person pairing instead of a look + person pairing), added it as its own
+explicit MUST-worded sentence in `buildTryOnPrompt` (matching Round 7's
+per-field treatment), and extended the addendum agent's system prompt to
+explicitly ask for this reasoning (previously it only asked for
+expression/angle/body-language/setting/hairstyle/fit, never "what makes
+them look great" as its own dimension).
+
+Not independently live-verified in this session (no `OPENAI_API_KEY`
+available) — typecheck and build both pass. If try-on results are ever
+reported as generically "fine but not flattering" (as opposed to a
+specific mechanical issue like wrong pose/expression), check the
+`tryOnAddendum` log's `flatteringDirection` value first to see whether
+the agent is actually reasoning concretely here, the same way the
+`hairstyleRendering` field was diagnosed in earlier rounds.
+
+### Logging coverage audit (no new bug — a proactive check per direct request)
+
+Per explicit request to make sure every error path anywhere in this
+codebase is actually logged, all `api-server/src/routes/*.ts` files were
+re-checked end to end: every route's outer catch block calls
+`logger.error` before responding with its 502; every inner
+primary-path-failed catch (Responses API falling back to `images.edit`)
+calls `logger.warn` before retrying; and all three structured-output call
+sites with a silent-empty-content risk (`writeTryOnAddendum`,
+`writeStylingAddendum`, `filterByImageContent`) already call `logger.warn`
+with the completion's `finish_reason` on that path, per the fixes
+documented earlier in this file. No gaps found — this was a verification
+pass, not a fix. If a new call site is ever added to any route in this
+directory, it must follow the same pattern: log on every catch and on
+every "the model returned nothing useful" branch, not just the final
+outer catch.
