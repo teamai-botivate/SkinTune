@@ -748,9 +748,9 @@ function SkinTune() {
         { kind: 'single', field: 'occasion', label: 'Where are you getting dressed for?', options: occasionOptions },
       ]}
       onNext={() => go('final-prefs')} onBack={back} />,
-    'final-prefs': <SectionStep profile={profile} update={update} step={10} eyebrow="10 / the finishing touch" title="How you want to come across, and your budget." body="Last section — then we'll make your five looks."
+    'final-prefs': <SectionStep profile={profile} update={update} step={10} eyebrow="10 / the finishing touch" title="How you want to come across, and your budget." body="Last section — then we'll search real stores for pieces that match."
       fields={[
-        { kind: 'multi', field: 'impression', label: 'How do you want to come across?', options: impressionOptions, max: 2 },
+        { kind: 'multi', field: 'impression', label: 'How do you want to come across?', options: impressionOptions, max: 2, required: false },
         { kind: 'single', field: 'budget', label: 'What feels comfortable for this edit?', options: budgetOptions },
       ]}
       continueLabel="Review my edit"
@@ -766,7 +766,7 @@ function Review({ profile, onEdit, onSave, onBack }: { profile: SkinTuneProfile;
     { label: 'Profile', value: `${profile.pronouns} · ${profile.ageGroup}`, target: 'profile' },
     { label: 'Build, fit & style', value: `${profile.bodyBuild} · ${profile.fit}${profile.style.length ? ` · ${profile.style.join(', ')}` : ''}`, target: 'body-style' },
     { label: 'Colours & moment', value: `Loves ${profile.colorsLove.join(', ')}${profile.colorsAvoid.length ? ` · avoids ${profile.colorsAvoid.join(', ')}` : ''} · ${profile.occasion}`, target: 'colors-occasion' },
-    { label: 'Impression & budget', value: `${profile.impression.join(', ')} · ${profile.budget}`, target: 'final-prefs' },
+    { label: 'Impression & budget', value: `${profile.impression.length ? `${profile.impression.join(', ')} · ` : ''}${profile.budget}`, target: 'final-prefs' },
   ];
   return <StepShell profile={profile} onBack={onBack} step={11}><Intro eyebrow="11 / your edit, at a glance" title={`This sounds like ${profile.name}.`} body="Look it over, make any changes, then we'll search real stores for pieces that match.">
     <div className="divide-y divide-border overflow-hidden rounded-[1.5rem] border border-border bg-card">{rows.map((row) => <div key={row.label} className="flex items-start justify-between gap-4 p-5"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[.13em] text-muted-foreground">{row.label}</p><p className="mt-1 line-clamp-2 text-sm leading-relaxed">{row.value}</p></div><button type="button" onClick={() => onEdit(row.target)} data-testid={`button-edit-${row.label.toLowerCase().replace(' ', '-')}`} className="focus-ring inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold text-primary hover:bg-secondary"><Pencil size={13} /> Edit</button></div>)}</div>

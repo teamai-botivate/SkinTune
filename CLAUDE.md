@@ -1681,3 +1681,51 @@ pass, not a fix. If a new call site is ever added to any route in this
 directory, it must follow the same pattern: log on every catch and on
 every "the model returned nothing useful" branch, not just the final
 outer catch.
+
+### Frontend: cut one genuinely-unused required wizard field on this branch
+
+Reported live: the onboarding form feels like too many required taps.
+Checked what `search-dresses.ts`/`try-on.ts` (this branch's ONLY two AI
+routes — `recommendations.ts` is unreachable here, see the top of this
+section) actually read from `SkinTuneProfile`: `pronouns`, `bodyBuild`,
+`fit`, `style`, `colorsLove`, `occasion`, `budget`. Confirmed by grep that
+`ageGroup`, `height`, `impression`, `colorsAvoid`, and `restrictions` are
+NEVER read by either route — they were meaningful inputs for the old
+AI-look-generation flow (`recommendations.ts`'s prompt, still present but
+dead code on this branch) but have zero effect on search results or
+try-on output here.
+
+Asked the user directly which of these to cut rather than assuming — this
+branch is a genuinely different product from `main` (search-driven, not
+recommendation-driven), so `main`'s CLAUDE.md note that "name, age,
+gender/pronouns, height, and budget... stay required, real questions"
+does not automatically transfer to this branch's different data flow.
+**User's explicit answer: keep `ageGroup` and `height` required** (do not
+cut them, even though they're unused by this branch's backend — real
+questions the user wants kept regardless). Only `impression` (the
+`final-prefs` section's multi-select "How do you want to come across?")
+was approved to change.
+
+Fix: `impression`'s `SectionField` entry gained `required: false` (the
+existing optional-field mechanism already used by `colorsAvoid`/
+`restrictions` — no new mechanism needed). `Review`'s summary line for
+this row was updated to not print a stray leading `" · "` when
+`impression` is empty. The `final-prefs` section's body copy was also
+updated from "we'll make your five looks" (stale language from the old
+AI-look flow, `main`-only) to "we'll search real stores for pieces that
+match", matching this branch's actual product. `colorsAvoid` and
+`restrictions` were already `required: false` from before this branch
+existed, so they were not adding required-tap friction and needed no
+change. `ageGroup`/`height`/`pronouns`/`bodyBuild`/`fit`/`style`/
+`colorsLove`/`occasion`/`budget` remain required, per the user's explicit
+answer for the first two and this branch's actual backend usage for the
+rest.
+
+Typecheck and `pnpm --filter @workspace/skintune run build` (with
+`PORT`/`BASE_PATH` env vars, per this file's Commands section) both pass.
+Field type/shape (`impression: string[]`) was not changed, only the
+wizard's required-gate — per this file's data-model warning about
+array-vs-string mismatches between wizard step components and
+`SkinTuneProfile`'s declared shape, changing a field's requiredness alone
+(not its `SectionField.kind` or its type in `types.ts`) carries none of
+that risk.
