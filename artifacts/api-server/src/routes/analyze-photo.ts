@@ -16,10 +16,10 @@ Be lenient by default. A normal phone selfie — held at arm's length, slightly 
 Your job:
 1. First, judge whether the photo is usable for styling colour analysis using the lenient standard above. If there's a genuine problem, pick the single most applicable one from this exact set: "low-light" (too dark to make out features, not just dim), "warm-light" (strong yellow/orange indoor tint clearly skewing colour, not just normal warm indoor light), "blurry" (face is not recognisably in focus), "angle" (face is not visible at all, e.g. turned fully away or looking down out of frame — a slightly tilted or low-angle selfie is fine), "filter" (an obvious strong beauty filter is visibly smoothing or altering the face), "occluded" (face is mostly covered by sunglasses, a hand, hair, or is out of frame). Use "good" for everything else, including typical imperfect but usable phone selfies.
 2. If the photo is usable (status "good"), estimate:
-   - skinTone: a short, respectful descriptive word (e.g. "Fair", "Light", "Medium", "Tan", "Deep", "Rich").
-   - undertone: "Warm", "Cool", or "Neutral".
+   - skinTone: a short, respectful descriptive word for the visible surface colour you can actually see in THIS photo (e.g. "Fair", "Light", "Medium", "Tan", "Deep", "Rich") — read this fresh from the photo, don't default to a generic middle value.
+   - undertone: "Warm", "Cool", or "Neutral" — the subtler underlying cast beneath the surface colour, independent of how light/dark the surface tone is.
    - contrast: "Low", "Medium", or "High" — the contrast between the person's hair/eyes and their skin tone.
-   - confidence: an integer 0-100 for how confident you are in this read given the photo quality. A normal selfie in typical indoor lighting should usually score 75-95, not low — reserve low confidence for genuinely borderline cases, not just "not a studio photo".
+   - confidence: an integer 0-100 that must genuinely vary with how easy THIS specific photo actually was to read, not cluster around one "safe" number. Reason explicitly about this photo's real signals before picking a number: lighting evenness (even, well-lit face vs. mixed/patchy light or hard shadows across the face), focus sharpness (crisp facial detail vs. soft/slightly-soft focus), how much of the face is clearly visible and at what size in the frame (large, unobstructed, close-to-camera vs. small, partial, or at a distance), and colour-cast clarity (neutral-ish light letting true skin colour show vs. a light tint you have to mentally correct for even though it wasn't strong enough to flag as "warm-light"). A photo that's well-lit, sharp, close, and neutrally lit deserves a high score (90+); a "good" but imperfect photo — slightly soft focus, a bit of mixed lighting, a face partly at an angle or slightly small in frame, a mild colour cast — should genuinely score lower (roughly 60-84) to reflect that real uncertainty, not be rounded up to a generic high number. Do not converge on the same number across different photos — two different "good" photos with different actual quality should get two different confidence scores.
 3. If the photo has a genuine problem (status is not "good"), still provide your best-guess skinTone/undertone/contrast (they'll be shown as provisional) but set confidence low (under 60) to reflect the uncertainty.
 
 Never make medical, health, or diagnostic claims. Never comment on attractiveness, body shape, or perceived flaws — this is styling context only, not a judgment. Be supportive and neutral in tone; your only output is the structured fields below, no extra commentary.
@@ -89,17 +89,32 @@ router.post("/analyze-photo", async (req, res) => {
       // rejects the older max_tokens param with a 400 ("Unsupported
       // parameter"). Do not revert to max_tokens without re-verifying
       // against whatever model is configured at the time.
-      // Raised from 300 to 800 — see try-on.ts's writeStylingAddendum for
-      // the confirmed root cause this budget size is guarding against:
-      // gpt-5.5 is a reasoning-model-family model whose internal reasoning
-      // tokens appear to count against this same budget, so a low limit
-      // risks the visible completion coming back empty even though the
-      // call itself succeeds.
-      max_completion_tokens: 800,
+      // Raised from 300 to 800, then to 1200 after the confidence-scoring
+      // prompt below was rewritten to require explicit per-photo reasoning
+      // (lighting evenness, focus sharpness, face size/visibility, colour-
+      // cast clarity) rather than a single anchored range — see try-on.ts's
+      // writeStylingAddendum for the confirmed root cause this budget size
+      // guards against: gpt-5.5 is a reasoning-model-family model whose
+      // internal reasoning tokens appear to count against this same budget,
+      // so a low limit risks the visible completion coming back empty even
+      // though the call itself succeeds. A prompt that asks for more
+      // reasoning naturally uses more of this budget on reasoning alone.
+      max_completion_tokens: 1200,
     });
 
     const raw = completion.choices[0]?.message?.content;
-    if (!raw) throw new Error("Model returned no content");
+    if (!raw) {
+      // Same empty-completion risk documented at length in try-on.ts's
+      // writeTryOnAddendum and generate-image.ts's writeStylingAddendum —
+      // logging finish_reason here specifically so an empty response is
+      // diagnosable as a token-budget issue (finish_reason "length") rather
+      // than an opaque "Model returned no content" with no further detail.
+      logger.error(
+        { finishReason: completion.choices[0]?.finish_reason },
+        "Photo analysis returned no content",
+      );
+      throw new Error("Model returned no content");
+    }
 
     const modelResult = ModelOutputSchema.parse(JSON.parse(raw));
     const data = AnalyzePhotoResponseSchema.parse(modelResult);

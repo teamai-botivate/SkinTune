@@ -1729,3 +1729,62 @@ array-vs-string mismatches between wizard step components and
 `SkinTuneProfile`'s declared shape, changing a field's requiredness alone
 (not its `SectionField.kind` or its type in `types.ts`) carries none of
 that risk.
+
+### `analyze-photo.ts`: confidence score always came back ~85%
+
+Reported live: the confidence percentage shown after photo upload was
+always the same number (~85%) regardless of the actual photo. Root cause
+found directly in the system prompt: the confidence instruction told the
+model "A normal selfie in typical indoor lighting should usually score
+75-95, not low" — an explicit anchored range with no per-photo signal to
+reason from. Combined with `temperature` being unavailable as a tuning
+lever on this codebase's model (gpt-5.5 rejects any non-default value —
+documented earlier in this file), the model had every incentive to
+converge on one "safe" number near the middle of that range (85) for
+every photo that passed the lenient quality gate, rather than genuinely
+reasoning about how easy each specific photo actually was to read.
+
+Fix: rewrote the confidence instruction to require explicit per-photo
+reasoning before picking a number — lighting evenness, focus sharpness,
+how much of the face is visible/how large it is in frame, and colour-cast
+clarity — and to explicitly forbid clustering: "Do not converge on the
+same number across different photos — two different 'good' photos with
+different actual quality should get two different confidence scores."
+Replaced the single anchored 75-95 range with a two-tier guide (90+ for a
+photo that's genuinely well-lit/sharp/close/neutral; 60-84 for a "good"
+but imperfect photo with real but non-disqualifying flaws) so there's a
+meaningfully different answer for meaningfully different photo quality,
+rather than one number that always satisfies "usually 75-95."
+
+Also raised `max_completion_tokens` 800 -> 1200 (the new prompt asks for
+more explicit reasoning, which plausibly consumes more of gpt-5.5's
+shared reasoning/output token budget — see this file's other notes on
+this exact failure pattern) and added a `logger.error` with
+`finish_reason` on the `if (!raw)` empty-content path, matching the
+established pattern elsewhere in this codebase, so an empty response here
+is diagnosable rather than just "Model returned no content" with no
+further detail.
+
+Not independently live-verified in this session (no `OPENAI_API_KEY`
+available) — typecheck and build both pass. If confidence still clusters
+around one number after this ships, pull a few real `/api/analyze-photo`
+responses across genuinely different-quality photos and compare — if
+they're still suspiciously close together, the anchoring may need to be
+removed even further (e.g. asking for a written quality assessment as a
+non-schema reasoning step before the number) rather than just relaxing
+the range further.
+
+**Also checked while investigating this: "overtone" vs "undertone" are
+already both represented, just under different names than education
+material uses.** The user shared reference material distinguishing
+"overtone" (visible surface skin colour, changes with tanning/sun/etc.)
+from "undertone" (subtler underlying cast, stays stable). This app's
+`skinTone` field (e.g. "Fair", "Medium", "Tan") already IS what that
+material calls "overtone," and `undertone` already matches directly — no
+missing concept, just a naming difference from that particular reference
+material's terminology. No renaming was done since `skinTone` is already
+used consistently across the schema, `SkinTuneProfile`, and the frontend
+display (`Review`, `AppearanceStep`) — only worth touching if the user
+specifically wants the UI-facing label changed to say "Overtone" instead
+of "Skin tone," which was not what was reported here (the reported bug
+was the confidence score, not the terminology).
