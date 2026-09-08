@@ -2024,3 +2024,26 @@ field list. Typecheck and `pnpm --filter @workspace/skintune run build`
 (with `PORT`/`BASE_PATH` env vars) both pass — confirms no other screen
 still referenced the two removed `Screen` values (a stale reference would
 have failed typecheck immediately, since `Screen` is a closed union).
+
+**Reverted almost immediately, per direct user feedback: "ek hi screen pe
+mat karo" (don't put it on one screen).** One dense scroll of all 7
+fields read as worse than three lighter, clearly-separated sections —
+even though the merged version had fewer taps (1 vs 3), the user
+explicitly preferred the original three-section split. Reverted
+`wizardScreens`/`Screen` back to including `'colors-occasion'` and
+`'final-prefs'`, restored the three separate `SectionStep` calls with
+their original field groupings, and restored `Review`'s three summary
+rows, `Home`'s `onQuickStart` target, and `review`'s step number (11)
+back to their pre-merge values. Typecheck and build both pass again.
+
+**Lesson for next time a "shorten the form" request comes in: fewer taps
+is not automatically better — verify the actual preference (screen count
+vs. field count vs. visual density) before restructuring, ideally by
+asking directly rather than assuming consolidation is always the win.**
+This branch has now tried, in order: making a field optional (kept —
+`impression`), removing fields entirely (kept — `colorsAvoid`/
+`restrictions`), and merging screens (reverted). If asked to shorten the
+form again, the two content-cutting approaches already worked and stayed;
+don't re-attempt screen-merging as the default lever without checking
+first whether the user specifically wants fewer taps or fewer/lighter
+screens — those are different asks with different answers here.

@@ -24,7 +24,7 @@ const queryClient = new QueryClient();
 
 type Screen =
   | 'welcome' | 'home' | 'name' | 'profile' | 'age' | 'height' | 'consent' | 'photo' | 'appearance'
-  | 'body-style' | 'review' | 'generating' | 'dresses'
+  | 'body-style' | 'colors-occasion' | 'final-prefs' | 'review' | 'generating' | 'dresses'
   | 'dress-detail' | 'try-on' | 'settings';
 
 const initialProfile: SkinTuneProfile = {
@@ -34,17 +34,20 @@ const initialProfile: SkinTuneProfile = {
   occasion: '', impression: [], budget: '',
 };
 
-// After the photo step, all remaining preference questions live on ONE
-// section screen (`body-style`, several related fields with checkbox-style
-// cards) instead of one screen per field or split across several section
-// screens — this was originally 3 separate sections (body/fit/style,
-// colours/occasion, impression/budget), each needing its own "Continue"
-// tap; per direct request to shorten the form further, all of that
-// section's fields were merged into this one screen so filling in
-// preferences after photo upload is a single scroll + one tap, not three.
+// After the photo step, the remaining questions are grouped into three
+// section screens (each holding several related fields with checkbox-style
+// cards) instead of one screen per field — this cuts an 11-screen tap-through
+// down to 3 sections so filling in preferences after photo upload takes
+// meaningfully less time. A single-screen version (all 7 fields merged
+// into one long scroll) was tried and reverted per direct user feedback
+// ("ek hi screen pe mat karo") — one dense scroll of 7 fields read as
+// worse than three lighter, clearly-separated sections, even though the
+// single-screen version had fewer taps. Keep this as 3 sections; if
+// shortening the form is asked for again, look for genuine content cuts
+// (a field nothing reads) rather than re-merging screens.
 const wizardScreens: Screen[] = [
   'name', 'profile', 'age', 'height', 'consent', 'photo', 'appearance',
-  'body-style', 'review',
+  'body-style', 'colors-occasion', 'final-prefs', 'review',
 ];
 const WIZARD_TOTAL = wizardScreens.length;
 
@@ -714,7 +717,7 @@ function SkinTune() {
   const isDressSaved = (dressId: string) => savedDresses.some((item) => item.dress.id === dressId);
 
   if (screen === 'welcome') return <Welcome onStart={() => go('name')} onPrivacy={() => go('settings')} />;
-  if (screen === 'home') return <Home profile={profile} savedDresses={savedDresses} onNew={() => { update({ photoUrl: '' }); go('name'); }} onResults={() => go(dresses.length ? 'dresses' : 'generating')} onSettings={openSettings} onQuickStart={(occasion) => { update({ occasion }); go('body-style'); }} />;
+  if (screen === 'home') return <Home profile={profile} savedDresses={savedDresses} onNew={() => { update({ photoUrl: '' }); go('name'); }} onResults={() => go(dresses.length ? 'dresses' : 'generating')} onSettings={openSettings} onQuickStart={(occasion) => { update({ occasion }); go('final-prefs'); }} />;
   if (screen === 'settings') return <Settings profile={profile} deletedNotice={deletedNotice} onBack={() => go(profile.name ? 'home' : 'welcome')} onDelete={() => { localStorage.removeItem('skintune-profile'); localStorage.removeItem('skintune-saved-looks'); localStorage.removeItem('skintune-feedback'); setProfile(initialProfile); setDeletedNotice(true); setTimeout(() => go('welcome'), 900); }} />;
   if (screen === 'photo') return <PhotoPanel profile={profile} update={update} onContinue={() => go('appearance')} onBack={back} />;
   if (screen === 'dresses') return <DressGrid profile={profile} dresses={dresses} shopLinks={shopLinks} hasMore={hasMoreDresses} loadingMore={loadingMoreDresses} loadMoreError={loadMoreError} onViewDress={viewDress} onLoadMore={() => {
@@ -736,13 +739,21 @@ function SkinTune() {
     height: <HeightStep profile={profile} update={update} step={4} eyebrow="04 / a little context" title="What's your height?" body="Optional — helps us tune proportion suggestions." onNext={() => go('consent')} onBack={back} />,
     consent: <ConsentStep profile={profile} onNext={() => go('photo')} onBack={back} />,
     appearance: <AppearanceStep profile={profile} onNext={() => go('body-style')} onPhoto={() => go('photo')} onBack={back} />,
-    'body-style': <SectionStep profile={profile} update={update} step={8} eyebrow="08 / your canvas" title="Your look, in one go." body="A few quick checkboxes — pick what fits, and we'll search real stores for pieces that match."
+    'body-style': <SectionStep profile={profile} update={update} step={8} eyebrow="08 / your canvas" title="Your build, fit, and style." body="A few quick checkboxes — pick what fits, and we'll get moving."
       fields={[
         { kind: 'single', field: 'bodyBuild', label: 'How would you describe your build?', options: bodyBuildOptions },
         { kind: 'single', field: 'fit', label: 'What fit feels like you?', options: fitOptions },
         { kind: 'multi', field: 'style', label: 'Which style worlds pull you in?', hint: 'Choose as many as you like.', options: styleOptions },
+      ]}
+      onNext={() => go('colors-occasion')} onBack={back} />,
+    'colors-occasion': <SectionStep profile={profile} update={update} step={9} eyebrow="09 / colours & the moment" title="Colour and where you're headed." body="Everything you need for this look, in one go."
+      fields={[
         { kind: 'multi', field: 'colorsLove', label: 'Which colors do you reach for?', options: colorLoveOptions, max: 5 },
         { kind: 'single', field: 'occasion', label: 'Where are you getting dressed for?', options: occasionOptions },
+      ]}
+      onNext={() => go('final-prefs')} onBack={back} />,
+    'final-prefs': <SectionStep profile={profile} update={update} step={10} eyebrow="10 / the finishing touch" title="How you want to come across, and your budget." body="Last section — then we'll search real stores for pieces that match."
+      fields={[
         { kind: 'multi', field: 'impression', label: 'How do you want to come across?', options: impressionOptions, max: 2, required: false },
         { kind: 'single', field: 'budget', label: 'What feels comfortable for this edit?', options: budgetOptions },
       ]}
@@ -758,9 +769,10 @@ function Review({ profile, onEdit, onSave, onBack }: { profile: SkinTuneProfile;
     { label: 'Appearance', value: `${profile.appearance.skinTone} · ${profile.appearance.undertone} undertone · ${profile.appearance.confidence}% confidence`, target: 'appearance' },
     { label: 'Profile', value: `${profile.pronouns} · ${profile.ageGroup}`, target: 'profile' },
     { label: 'Build, fit & style', value: `${profile.bodyBuild} · ${profile.fit}${profile.style.length ? ` · ${profile.style.join(', ')}` : ''}`, target: 'body-style' },
-    { label: 'Colours, moment & budget', value: `Loves ${profile.colorsLove.join(', ')} · ${profile.occasion}${profile.impression.length ? ` · ${profile.impression.join(', ')}` : ''} · ${profile.budget}`, target: 'body-style' },
+    { label: 'Colours & moment', value: `Loves ${profile.colorsLove.join(', ')} · ${profile.occasion}`, target: 'colors-occasion' },
+    { label: 'Impression & budget', value: `${profile.impression.length ? `${profile.impression.join(', ')} · ` : ''}${profile.budget}`, target: 'final-prefs' },
   ];
-  return <StepShell profile={profile} onBack={onBack} step={9}><Intro eyebrow="09 / your edit, at a glance" title={`This sounds like ${profile.name}.`} body="Look it over, make any changes, then we'll search real stores for pieces that match.">
+  return <StepShell profile={profile} onBack={onBack} step={11}><Intro eyebrow="11 / your edit, at a glance" title={`This sounds like ${profile.name}.`} body="Look it over, make any changes, then we'll search real stores for pieces that match.">
     <div className="divide-y divide-border overflow-hidden rounded-[1.5rem] border border-border bg-card">{rows.map((row) => <div key={row.label} className="flex items-start justify-between gap-4 p-5"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[.13em] text-muted-foreground">{row.label}</p><p className="mt-1 line-clamp-2 text-sm leading-relaxed">{row.value}</p></div><button type="button" onClick={() => onEdit(row.target)} data-testid={`button-edit-${row.label.toLowerCase().replace(' ', '-')}`} className="focus-ring inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold text-primary hover:bg-secondary"><Pencil size={13} /> Edit</button></div>)}</div>
     <FooterActions onBack={onBack} onContinue={onSave} label="✨ Find my dresses" />
   </Intro></StepShell>;
