@@ -1981,3 +1981,46 @@ tones, always "Cool" for deeper tones, rather than varying independently
 of depth), that's a sign the model is still conflating the two questions
 despite the instruction, and the prompt may need an even more explicit
 worked example of a specific undertone-independent-of-depth case.
+
+### Frontend: merged the last 3 post-photo section screens into 1
+
+Follow-up to the two earlier "shorten the form" rounds above (cutting
+`impression` to optional, then removing `colorsAvoid`/`restrictions`
+entirely) — the user asked again to shorten the form further. Every
+remaining field (`bodyBuild`, `fit`, `style`, `colorsLove`, `occasion`,
+`impression`, `budget`) is genuinely read by this branch's backend (the
+search query or the try-on prompt) or was explicitly confirmed by the
+user as a real question to keep even though unused (see the earlier
+`impression`/age/height discussion) — so no more CONTENT could be cut
+without either losing search quality or contradicting a direct user
+decision. Discussed three structural options directly with the user
+(free-text + AI extraction, inferring `bodyBuild` from the photo instead
+of asking, merging screens) — user chose to keep `bodyBuild` as a real
+asked question (declined the photo-inference option) and settled on pure
+screen consolidation: same fields, same content, fewer "Continue" taps.
+
+Fix: the three separate `SectionStep` screens this branch had —
+`body-style` (build, fit, style), `colors-occasion` (colours, occasion),
+`final-prefs` (impression, budget) — were merged into ONE `body-style`
+screen with all 7 fields in its `fields` array, one scroll, one "Review my
+edit" button at the end instead of three separate "Continue" taps across
+three screens. `'colors-occasion'` and `'final-prefs'` were removed from
+the `Screen` union type and `wizardScreens` entirely (not just visually
+hidden) — `wizardScreens` is now `name, profile, age, height, consent,
+photo, appearance, body-style, review` (9 steps, was 11). Fixed every
+now-stale reference: `Review`'s three separate summary rows (build/fit/
+style, colours/moment, impression/budget) were merged into two rows, both
+targeting `body-style` for their "Edit" button; `Home`'s `onQuickStart`
+(previously jumping straight to `final-prefs`) now jumps to `body-style`;
+`review`'s own step number was corrected from 11 to 9 (position in the
+now-shorter `wizardScreens`) since `StepShell`'s progress indicator reads
+this number directly, not computed from the array.
+
+This is a pure screen-consolidation change — no field was removed, no
+field's required/optional status changed, no backend contract changed.
+`isSectionFieldFilled`'s gating logic (already generic per-field, not
+per-section) required no change to correctly gate the larger combined
+field list. Typecheck and `pnpm --filter @workspace/skintune run build`
+(with `PORT`/`BASE_PATH` env vars) both pass — confirms no other screen
+still referenced the two removed `Screen` values (a stale reference would
+have failed typecheck immediately, since `Screen` is a closed union).
