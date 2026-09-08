@@ -13,10 +13,10 @@ import { analyzePhoto } from './services/photo-analysis';
 import { createActivityLog, type LogStep } from './lib/activity-log';
 import { photoAnalysisStages, photoDiagnostics } from './data/photo-diagnostics';
 import {
-  ageGroupOptions, bodyBuildOptions, budgetOptions, colorAvoidOptions, colorLoveOptions,
+  ageGroupOptions, bodyBuildOptions, budgetOptions, colorLoveOptions,
   fitOptions, homeOccasionShortcuts,
   impressionOptions, occasionOptions, pronounOptions,
-  restrictionOptions, styleOptions, type SelectOption,
+  styleOptions, type SelectOption,
 } from './data/options';
 import type { DressResult, PhotoStatus, ShopLink, SkinTuneProfile } from './types';
 
@@ -740,11 +740,9 @@ function SkinTune() {
         { kind: 'multi', field: 'style', label: 'Which style worlds pull you in?', hint: 'Choose as many as you like.', options: styleOptions },
       ]}
       onNext={() => go('colors-occasion')} onBack={back} />,
-    'colors-occasion': <SectionStep profile={profile} update={update} step={9} eyebrow="09 / colours & the moment" title="Colour, comfort, and where you're headed." body="Everything you need for this look, in one go."
+    'colors-occasion': <SectionStep profile={profile} update={update} step={9} eyebrow="09 / colours & the moment" title="Colour and where you're headed." body="Everything you need for this look, in one go."
       fields={[
         { kind: 'multi', field: 'colorsLove', label: 'Which colors do you reach for?', options: colorLoveOptions, max: 5 },
-        { kind: 'multi', field: 'colorsAvoid', label: 'Anything you tend to avoid?', options: colorAvoidOptions, required: false },
-        { kind: 'multi', field: 'restrictions', label: 'Anything we should work around?', options: restrictionOptions, required: false },
         { kind: 'single', field: 'occasion', label: 'Where are you getting dressed for?', options: occasionOptions },
       ]}
       onNext={() => go('final-prefs')} onBack={back} />,
@@ -765,7 +763,7 @@ function Review({ profile, onEdit, onSave, onBack }: { profile: SkinTuneProfile;
     { label: 'Appearance', value: `${profile.appearance.skinTone} · ${profile.appearance.undertone} undertone · ${profile.appearance.confidence}% confidence`, target: 'appearance' },
     { label: 'Profile', value: `${profile.pronouns} · ${profile.ageGroup}`, target: 'profile' },
     { label: 'Build, fit & style', value: `${profile.bodyBuild} · ${profile.fit}${profile.style.length ? ` · ${profile.style.join(', ')}` : ''}`, target: 'body-style' },
-    { label: 'Colours & moment', value: `Loves ${profile.colorsLove.join(', ')}${profile.colorsAvoid.length ? ` · avoids ${profile.colorsAvoid.join(', ')}` : ''} · ${profile.occasion}`, target: 'colors-occasion' },
+    { label: 'Colours & moment', value: `Loves ${profile.colorsLove.join(', ')} · ${profile.occasion}`, target: 'colors-occasion' },
     { label: 'Impression & budget', value: `${profile.impression.length ? `${profile.impression.join(', ')} · ` : ''}${profile.budget}`, target: 'final-prefs' },
   ];
   return <StepShell profile={profile} onBack={onBack} step={11}><Intro eyebrow="11 / your edit, at a glance" title={`This sounds like ${profile.name}.`} body="Look it over, make any changes, then we'll search real stores for pieces that match.">

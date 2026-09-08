@@ -15,9 +15,9 @@ Be lenient by default. A normal phone selfie — held at arm's length, slightly 
 
 Your job:
 1. First, judge whether the photo is usable for styling colour analysis using the lenient standard above. If there's a genuine problem, pick the single most applicable one from this exact set: "low-light" (too dark to make out features, not just dim), "warm-light" (strong yellow/orange indoor tint clearly skewing colour, not just normal warm indoor light), "blurry" (face is not recognisably in focus), "angle" (face is not visible at all, e.g. turned fully away or looking down out of frame — a slightly tilted or low-angle selfie is fine), "filter" (an obvious strong beauty filter is visibly smoothing or altering the face), "occluded" (face is mostly covered by sunglasses, a hand, hair, or is out of frame). Use "good" for everything else, including typical imperfect but usable phone selfies.
-2. If the photo is usable (status "good"), estimate:
-   - skinTone: a short, respectful descriptive word for the visible surface colour you can actually see in THIS photo (e.g. "Fair", "Light", "Medium", "Tan", "Deep", "Rich") — read this fresh from the photo, don't default to a generic middle value.
-   - undertone: "Warm", "Cool", or "Neutral" — the subtler underlying cast beneath the surface colour, independent of how light/dark the surface tone is.
+2. If the photo is usable (status "good"), estimate, reasoning through each of these as a distinct step rather than guessing a single overall impression:
+   - skinTone: this is the OVERTONE — the visible surface colour you can actually see in THIS photo at first glance (a short, respectful descriptive word: "Fair", "Light", "Medium", "Tan", "Deep", "Rich"). Read this fresh from the actual photo's lighting and camera colour balance — mentally correct for any obvious warm/cool tint in the lighting itself before judging the value, so the read reflects the person's real surface tone, not the room's lighting colour. Don't default to a generic middle value like "Medium" out of caution; commit to what the photo actually shows.
+   - undertone: "Warm", "Cool", or "Neutral" — this is the subtler underlying cast beneath the surface colour, independent of how light/dark that surface tone is (it stays relatively stable even if the person tans or the surface tone above reads differently). Reason from concrete visual signals actually visible in the photo: a warm undertone shows as yellow/golden/peachy casts, especially visible where skin is thinner (cheeks catching light, under the eyes); a cool undertone shows as pink/rosy/reddish or slightly bluish casts in the same areas; a neutral undertone shows a fairly even balance of both with no cast dominating. Do not just restate the skinTone value in different words — undertone and skinTone are answering two different questions (surface lightness/depth vs. underlying colour cast) and should be reasoned separately, even though they're often reported together.
    - contrast: "Low", "Medium", or "High" — the contrast between the person's hair/eyes and their skin tone.
    - confidence: an integer 0-100 that must genuinely vary with how easy THIS specific photo actually was to read, not cluster around one "safe" number. Reason explicitly about this photo's real signals before picking a number: lighting evenness (even, well-lit face vs. mixed/patchy light or hard shadows across the face), focus sharpness (crisp facial detail vs. soft/slightly-soft focus), how much of the face is clearly visible and at what size in the frame (large, unobstructed, close-to-camera vs. small, partial, or at a distance), and colour-cast clarity (neutral-ish light letting true skin colour show vs. a light tint you have to mentally correct for even though it wasn't strong enough to flag as "warm-light"). A photo that's well-lit, sharp, close, and neutrally lit deserves a high score (90+); a "good" but imperfect photo — slightly soft focus, a bit of mixed lighting, a face partly at an angle or slightly small in frame, a mild colour cast — should genuinely score lower (roughly 60-84) to reflect that real uncertainty, not be rounded up to a generic high number. Do not converge on the same number across different photos — two different "good" photos with different actual quality should get two different confidence scores.
 3. If the photo has a genuine problem (status is not "good"), still provide your best-guess skinTone/undertone/contrast (they'll be shown as provisional) but set confidence low (under 60) to reflect the uncertainty.
@@ -90,16 +90,20 @@ router.post("/analyze-photo", async (req, res) => {
       // parameter"). Do not revert to max_tokens without re-verifying
       // against whatever model is configured at the time.
       // Raised from 300 to 800, then to 1200 after the confidence-scoring
-      // prompt below was rewritten to require explicit per-photo reasoning
+      // prompt was rewritten to require explicit per-photo reasoning
       // (lighting evenness, focus sharpness, face size/visibility, colour-
-      // cast clarity) rather than a single anchored range — see try-on.ts's
+      // cast clarity) rather than a single anchored range, then to 1600
+      // after skinTone/undertone's instructions were similarly rewritten to
+      // require distinct step-by-step reasoning (lighting-corrected surface
+      // tone, then separate warm/cool/neutral cast reasoning from concrete
+      // visual signals) instead of one quick combined guess — see try-on.ts's
       // writeStylingAddendum for the confirmed root cause this budget size
       // guards against: gpt-5.5 is a reasoning-model-family model whose
       // internal reasoning tokens appear to count against this same budget,
       // so a low limit risks the visible completion coming back empty even
       // though the call itself succeeds. A prompt that asks for more
       // reasoning naturally uses more of this budget on reasoning alone.
-      max_completion_tokens: 1200,
+      max_completion_tokens: 1600,
     });
 
     const raw = completion.choices[0]?.message?.content;

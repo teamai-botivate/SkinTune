@@ -1892,3 +1892,92 @@ remaining quota. If this exact 432 message is ever reported again, do not
 attempt another code change for it — confirm via the (now-visible) error
 detail that it's genuinely this same 432 message before doing anything,
 and point the user at Tavily's dashboard.
+
+### Frontend: removed two genuinely-unused optional fields (`colorsAvoid`, `restrictions`) from the wizard
+
+Follow-up to the earlier "cut one genuinely-unused required wizard field"
+note above (`impression`) — the user asked to shorten the form further.
+Checked again what `search-dresses.ts`/`try-on.ts` actually read:
+`colorsAvoid` and `restrictions` are NEVER read by either route (only
+`recommendations.ts`, unreachable on this branch, reads them). They were
+already `required: false` (never blocked completion), but still appeared
+as an extra scroll/decision point on the `colors-occasion` section with
+zero effect on search results or try-on output.
+
+Per the user's explicit choice (discussed directly rather than assumed —
+same pattern as the `impression` cut): removed both fields' entries from
+`colors-occasion`'s `SectionField` array entirely (not just left optional)
+— `colorsLove` and `occasion` are the only fields left in that section.
+`Review`'s summary line for that row was updated to drop the now-always-
+empty "avoids ..." clause. The now-unused `colorAvoidOptions`/
+`restrictionOptions` imports were removed from `App.tsx` to keep the
+typecheck clean.
+
+**Deliberately did NOT remove `colorsAvoid`/`restrictions` from
+`SkinTuneProfile`, `initialProfile`, or `skintune-schemas.ts`'s Zod
+schema** — unlike `priorities`/`occasionDetails` on `main` (which this
+file's Frontend architecture section documents as fully removed), these
+two fields are still read by `recommendations.ts`'s prompt, which this
+branch's own CLAUDE.md section explicitly says was "deliberately LEFT IN
+PLACE... so main's flow can be restored quickly if ever needed without
+resurrecting deleted files." Removing the field from the type/schema
+would break that restore path. The fields still exist on the profile
+type and default to empty arrays — the wizard just never collects them on
+this branch anymore, exactly the same pattern already used for
+`impression`'s optional-but-present handling, just taken one step further
+since these are never read at all on this branch (vs. `impression`, which
+is at least still shown, just optional).
+
+Typecheck and `pnpm --filter @workspace/skintune run build` (with
+`PORT`/`BASE_PATH` env vars) both pass.
+
+### `analyze-photo.ts`: skinTone/undertone reasoning strengthened alongside the confidence fix
+
+Follow-up to the confidence-scoring fix above, per direct request for
+"better analysis." That fix added explicit step-by-step reasoning
+requirements for the `confidence` field but left `skinTone`/`undertone`'s
+instructions as a single short sentence each — no equivalent push toward
+genuine, distinct reasoning for the two fields that actually carry the
+styling-relevant read.
+
+The user separately shared consumer-education material distinguishing
+"overtone" (visible surface skin colour — changes with tanning/sun/
+lighting) from "undertone" (subtler underlying cast — stays relatively
+stable). Confirmed (and explicitly told the user, who then said "keep it
+as-is, just make it analyze well") that this app's existing `skinTone`
+field already IS what that material calls "overtone," and `undertone`
+already matches directly — no field renaming was done, per the user's
+explicit instruction to keep it as-is; only the REASONING quality behind
+those two existing fields was improved.
+
+Fix: `skinTone`'s instruction now explicitly names it as the overtone —
+the visible surface colour at first glance — and instructs the model to
+mentally correct for the photo's own lighting colour cast before judging
+the value, rather than reading the lighting's tint as if it were the
+skin's own colour. `undertone`'s instruction now asks the model to reason
+from concrete visual signals (warm = yellow/golden/peachy casts,
+especially where skin is thinner like cheeks/under-eyes; cool = pink/
+rosy/reddish or slightly bluish casts in the same areas; neutral = no
+cast dominating) rather than just picking a label, and explicitly warns
+against restating `skinTone` in different words — the two fields answer
+different questions (surface lightness/depth vs. underlying colour cast)
+and should be reasoned separately even though shown together.
+
+`max_completion_tokens` raised 1200 -> 1600, matching this file's
+established pattern that a prompt asking for more explicit reasoning
+needs more budget for gpt-5.5's internal reasoning tokens, which count
+against the same completion-token budget as the visible JSON output (see
+this file's other notes on this exact failure pattern — an empty response
+here would show as a `logger.error` with `finish_reason: "length"`, per
+the earlier fix in this same route).
+
+Not independently live-verified in this session (no `OPENAI_API_KEY`
+available) — typecheck and build both pass. If skinTone/undertone reads
+still feel generic or inaccurate after this ships, pull a few real
+`/api/analyze-photo` responses across genuinely different-coloring photos
+and compare the actual values returned — if undertone in particular keeps
+just mirroring skinTone's lightness (e.g. always "Warm" for lighter
+tones, always "Cool" for deeper tones, rather than varying independently
+of depth), that's a sign the model is still conflating the two questions
+despite the instruction, and the prompt may need an even more explicit
+worked example of a specific undertone-independent-of-depth case.
