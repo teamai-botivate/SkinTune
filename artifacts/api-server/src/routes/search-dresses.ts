@@ -501,9 +501,19 @@ router.post("/search-dresses", async (req, res) => {
 
     const perTaskCards: DressResult[][] = [];
     const allResults: TavilyResult[] = [];
+    // Collected so that if EVERY task fails, the actual per-task reasons
+    // (a real Tavily error message, not a generic string) can be surfaced
+    // in the thrown error below — see that error's own comment for why
+    // this matters: without it, genuinely different root causes (an
+    // invalid/expired TAVILY_API_KEY, Tavily's own usage-cap 432, a query
+    // that returns zero results) were all indistinguishable from the
+    // frontend and from this route's own logs alike.
+    const taskFailureReasons: string[] = [];
     for (const outcome of taskResults) {
       if (outcome.status === "rejected") {
         logger.warn({ err: outcome.reason }, "One per-site dress search task failed; continuing with the others");
+        const reason = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+        taskFailureReasons.push(reason);
         continue;
       }
       const { images, results } = outcome.value;
@@ -538,7 +548,21 @@ router.post("/search-dresses", async (req, res) => {
     const shopLinks = buildShopLinks(allResults, profile, 8);
 
     if (dresses.length === 0) {
-      throw new Error("No real dress results found across any site for this search — every per-site task returned nothing usable.");
+      // Include the REAL per-task failure reasons (a genuine Tavily error
+      // message, e.g. a 401 invalid-key or a 432 usage-cap response — see
+      // this file's other notes on that exact 432 case) when every task
+      // actually failed, rather than only this generic sentence — a
+      // real, live-reported gap: this message used to be identical
+      // whether the cause was an invalid/expired TAVILY_API_KEY, Tavily's
+      // own usage cap, or a genuinely zero-result query, making it
+      // impossible to tell which from the frontend (or without separately
+      // pulling Render logs) every time this was reported.
+      const detail = taskFailureReasons.length
+        ? ` Per-site errors: ${taskFailureReasons.join(" | ")}`
+        : " Every per-site task completed but returned zero usable results after filtering — this points at the search query/filters themselves, not a Tavily-side error.";
+      throw new Error(
+        `No real dress results found across any site for this search — every per-site task returned nothing usable.${detail}`,
+      );
     }
 
     const data = SearchDressesResponseSchema.parse({

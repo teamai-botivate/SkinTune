@@ -1839,3 +1839,56 @@ searches still return nothing after this ships, that points at something
 else (Tavily's own usage cap — see the earlier note on 432 responses — or
 a genuinely different query-construction issue), not this exclusion
 string, since it's now removed entirely.
+
+### `search-dresses.ts`: confirmed live, the revert above was correct but NOT the whole story — same generic error still appeared, real cause was Tavily's usage cap
+
+Immediately after the revert above deployed, the user reported the exact
+same "No real dress results found... every per-site task returned nothing
+usable" 502. This looked at first like the revert hadn't fixed anything —
+but pulling real Render logs (the user pasted them directly) showed the
+true per-task failure reason, and it was NOT the query-construction issue
+from the revert above:
+
+```
+Tavily search failed: 432 {"detail":{"error":"This request exceeds your
+plan's set usage limit. Please upgrade your plan or contact
+support@tavily.com"}}
+```
+
+This is exactly the same 432 usage-cap error already documented earlier
+in this file ("Tavily free/dev-tier keys have a monthly usage cap — a
+real production issue, not a code bug") — it recurred because the plan's
+limit was hit again (or still), completely independent of the query-
+string revert. **The revert above was still correct and should stay
+reverted** — it fixed a real, different regression (the query-string
+issue could have caused this same generic message via a totally separate
+mechanism) — but it was never going to fix THIS particular occurrence,
+since the actual blocker was account-level, not code.
+
+**The real gap this exposed: the thrown "No real dress results found..."
+error never included the ACTUAL per-task failure reason**, even though
+every individual per-site task's real error (visible only in Render's own
+logs, at `logger.warn` level) was already being captured. A 401
+invalid-key, this 432 usage-cap, and a genuinely empty result set were
+all indistinguishable from the user-facing error message and from the
+screenshot alike — this is why the "same error" looked like an unfixed
+regression when it was actually a completely different, unrelated cause.
+
+Fix: `search-dresses.ts`'s route handler now collects each rejected
+per-site task's real error message into `taskFailureReasons`, and the
+final "No real dress results found" error appends either those real
+per-task messages (when tasks genuinely failed) or a distinct message
+when every task succeeded but still filtered down to zero results
+(pointing at query/filter logic instead of a Tavily-side error) — so the
+NEXT time this generic-looking error appears, the actual cause (a real
+Tavily error body, e.g. this exact 432) is visible directly in the
+frontend/screenshot without needing a separate Render log pull.
+
+**This specific 432 is not a code bug and has no code fix** — it means
+this exact Tavily API key's plan-level usage limit is currently
+exhausted. The fix is entirely on Tavily's side: upgrade the plan at
+app.tavily.com, wait for the next billing cycle, or swap in a key with
+remaining quota. If this exact 432 message is ever reported again, do not
+attempt another code change for it — confirm via the (now-visible) error
+detail that it's genuinely this same 432 message before doing anything,
+and point the user at Tavily's dashboard.
