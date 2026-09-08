@@ -50,21 +50,36 @@ function buildSearchQuery(profile: SkinTuneProfile, colour: string, style: strin
     audience,
     style,
     colour,
-    // "clothing outfit" (not just "outfit") and the trailing "-jewellery
-    // -accessories -eyewear" exclusion terms are both deliberate — a real
-    // test run returned glasses and a pendant/jewellery listing for what
-    // should have been a garments-only search. Tavily supports simple
-    // "-term" exclusion syntax in a free-text query the same way a normal
-    // web search engine does, so this nudges the search itself away from
-    // the accessories category in addition to the isRelevantToProfile
-    // text filter and the vision-based filterByImageContent check below —
-    // three independent layers since no single one is airtight on its own.
+    // "clothing outfit" (not just "outfit") nudges the search toward
+    // garments without needing exclusion syntax — see below for why the
+    // exclusion terms that used to sit here were removed.
     profile.occasion ? `${profile.occasion} clothing outfit` : "clothing outfit",
     "online",
     profile.budget ? `price ${profile.budget}` : "",
-    "-jewellery -jewelry -pendant -necklace -earrings -eyewear -glasses -sunglasses -watch -handbag",
   ].filter(Boolean);
   return parts.join(" ");
+  // A real, live-reported regression: this function used to also append
+  // "-jewellery -jewelry -pendant -necklace -earrings -eyewear -glasses
+  // -sunglasses -watch -handbag" here, on the theory that Tavily supports
+  // simple "-term" free-text exclusion the way a normal web search engine
+  // does. The very next production deploy after that shipped, EVERY
+  // per-site search task started returning zero usable results
+  // ("No real dress results found across any site for this search — every
+  // per-site task returned nothing usable") — a strictly worse outcome
+  // than the accessories problem this was meant to fix. Ten "-term" tokens
+  // stacked onto an already multi-clause query produces a long, unnatural
+  // string that plausibly either returns nothing from Tavily itself, or
+  // returns a thin result set that the OTHER two independent filter layers
+  // (isRelevantToProfile's text denylist, filterByImageContent's vision
+  // check — both still in place, see below) then squeeze down to zero
+  // survivors. This was reverted rather than "fixed further" — accessory
+  // exclusion belongs entirely in the two result-level filters, which
+  // reject bad results AFTER they come back rather than risking the
+  // search itself returning nothing. Do not re-add a query-level
+  // exclusion string without first live-testing the exact resulting query
+  // directly against api.tavily.com/search and confirming it still
+  // returns a reasonable number of results — this is not a hypothetical
+  // risk, it broke production immediately the one time it was tried.
 }
 
 /**

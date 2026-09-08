@@ -1788,3 +1788,54 @@ display (`Review`, `AppearanceStep`) — only worth touching if the user
 specifically wants the UI-facing label changed to say "Overtone" instead
 of "Skin tone," which was not what was reported here (the reported bug
 was the confidence score, not the terminology).
+
+### `search-dresses.ts`: the accessories query-exclusion fix broke search entirely — reverted
+
+Reported live with a screenshot, immediately after the accessories fix
+above shipped: EVERY dress search started failing with "No real dress
+results found across any site for this search — every per-site task
+returned nothing usable" (a 502, `Generating`'s error state). This is a
+strictly worse regression than the accessories problem that fix was
+solving — a completely broken search, not an occasional wrong result.
+
+Root cause: that fix's layer 2 (`buildSearchQuery` appending `-jewellery
+-jewelry -pendant -necklace -earrings -eyewear -glasses -sunglasses
+-watch -handbag` to the query string, on the theory that Tavily supports
+"-term" free-text exclusion the way a normal web search engine does) was
+never live-tested against the real Tavily API before shipping — the
+CLAUDE.md note for that fix explicitly flagged this ("Not independently
+live-verified in this session"). Ten "-term" tokens stacked onto an
+already multi-clause query (`buy men's classic navy office clothing
+outfit online price mid-range -jewellery -jewelry -pendant -necklace
+-earrings -eyewear -glasses -sunglasses -watch -handbag`) produces a
+long, unnatural query string — plausibly this either returns nothing
+useful from Tavily directly, or returns a thin result set that the OTHER
+two independent filter layers (the text denylist, the vision check) then
+squeeze down to zero survivors once stacked on top.
+
+Fix: reverted layer 2 entirely — removed the exclusion-term string from
+`buildSearchQuery`. Layers 1 (`isRelevantToProfile`'s text denylist) and 3
+(`filterByImageContent`'s vision check) are both still in place and
+unaffected — they filter results AFTER Tavily returns them, so they carry
+none of the "might return zero results from the search itself" risk that
+layer 2 did. Left a detailed comment in `buildSearchQuery` explaining
+exactly why the exclusion string is gone and what to check (live-test the
+exact resulting query string directly against `api.tavily.com/search`
+first) before ever re-adding a query-level exclusion approach.
+
+**This is a direct instance of a rule already stated elsewhere in this
+file, worth restating: don't ship a change to `buildSearchQuery`'s actual
+query construction without live-testing the resulting query against the
+real Tavily API first** — this file already documents that
+`include_domains` behaves differently live than its own description
+suggests; the same caution applies to any new query-syntax feature
+(exclusion terms, phrase quoting, etc.), not just parameters that have an
+API doc to check.
+
+Not independently live-verified in this session (no `TAVILY_API_KEY`
+available) — typecheck and build both pass, and this is a revert to
+previously-working query construction, not new unverified logic. If
+searches still return nothing after this ships, that points at something
+else (Tavily's own usage cap — see the earlier note on 432 responses — or
+a genuinely different query-construction issue), not this exclusion
+string, since it's now removed entirely.
