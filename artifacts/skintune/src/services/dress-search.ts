@@ -9,7 +9,7 @@
 // Same boundary discipline as the rest of the app: UI components only ever
 // call these functions, never a search/image provider SDK directly.
 
-import type { DressResult, ShopLink, SkinTuneProfile } from '../types';
+import type { DressResult, ProductFeedbackType, SessionMemory, ShopLink, SkinTuneProfile } from '../types';
 import { createActivityLog } from '../lib/activity-log';
 
 export type DressSearchPage = {
@@ -77,22 +77,33 @@ export const searchDresses = async (
 };
 
 /**
- * Generates a try-on image: the user's own uploaded photo, re-dressed in
+ * Generates a try-on image: a reference photo of the user, re-dressed in
  * the exact dress they picked. Throws on failure — the calling screen
  * should show a retry state rather than silently showing nothing, since
  * this is a single explicit user action ("try this on"), not a background
  * batch fetch with independent per-item fallbacks like generate-image.ts.
+ *
+ * `avatarImageUrl` is the user's ACTIVE AVATAR image (see services/
+ * avatar.ts), not their raw uploaded selfie — this is the actual "avatar
+ * reuse" implementation this branch's product spec calls for: the avatar
+ * was already generated once as a clean, identity-preserving full-length
+ * reference photo, so every try-on reuses that same photo as the identity
+ * reference instead of re-deriving identity/build/framing from a raw
+ * close-up selfie on every single request. The backend's /api/try-on
+ * contract is otherwise unchanged (still just a `photoUrl` field) — this
+ * is a caller-side swap of WHICH photo gets sent, not a schema change.
  */
 export const tryOnDress = async (
   dress: DressResult,
   profile: SkinTuneProfile,
+  avatarImageUrl: string,
 ): Promise<string> => {
-  if (!profile.photoUrl) throw new Error('A photo is required to try on a dress.');
-  const { photoUrl, ...profileForRequest } = profile;
+  if (!avatarImageUrl) throw new Error('A personal avatar is required to try on a dress.');
+  const { photoUrl: _photoUrl, ...profileForRequest } = profile;
   const res = await fetch('/api/try-on', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ dress, profile: profileForRequest, photoUrl }),
+    body: JSON.stringify({ dress, profile: profileForRequest, photoUrl: avatarImageUrl }),
   });
   if (!res.ok) {
     const detail = await readErrorMessage(res, `Server returned ${res.status}`);
@@ -101,4 +112,102 @@ export const tryOnDress = async (
   const data = (await res.json()) as { imageUrl: string };
   if (!data.imageUrl) throw new Error('Empty try-on response');
   return data.imageUrl;
+};
+
+/**
+ * "Research Again" (this branch's product spec, section 25) — a genuinely
+ * new search, not a repeat of the same 10 results. `memory` carries what's
+ * already been seen/rejected so the backend can steer away from repeats —
+ * see backend's runDressSearch/buildSearchQuery for how this is actually
+ * used, not just logged.
+ */
+export const researchAgain = async (
+  profile: SkinTuneProfile,
+  memory: SessionMemory,
+  limit = 10,
+  log?: ActivityLog,
+): Promise<DressSearchPage> => {
+  const { photoUrl: _photoUrl, ...profileForRequest } = profile;
+  log?.start('Searching real stores');
+  let res: Response;
+  try {
+    res = await fetch('/api/search-dresses/research', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile: profileForRequest, limit, memory }),
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : 'Network request failed';
+    log?.fail('Searching real stores', detail);
+    throw err;
+  }
+  if (!res.ok) {
+    const detail = await readErrorMessage(res, `Server returned ${res.status}`);
+    log?.fail('Searching real stores', detail);
+    throw new Error(`Research-again request failed: ${res.status} — ${detail}`);
+  }
+  log?.done('Searching real stores');
+  return (await res.json()) as DressSearchPage;
+};
+
+/**
+ * "Refine Search" (this branch's product spec, section 26) — same
+ * seen/rejected exclusion as researchAgain, plus the user's own free-text
+ * steering instruction. Temporary for this session: this call never
+ * touches `profile` itself, so nothing here becomes a permanent preference
+ * unless a caller separately decides to save it.
+ */
+export const refineSearch = async (
+  profile: SkinTuneProfile,
+  memory: SessionMemory,
+  refinement: string,
+  limit = 10,
+  log?: ActivityLog,
+): Promise<DressSearchPage> => {
+  const { photoUrl: _photoUrl, ...profileForRequest } = profile;
+  log?.start('Searching real stores');
+  let res: Response;
+  try {
+    res = await fetch('/api/search-dresses/refine', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile: profileForRequest, limit, memory, refinement }),
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : 'Network request failed';
+    log?.fail('Searching real stores', detail);
+    throw err;
+  }
+  if (!res.ok) {
+    const detail = await readErrorMessage(res, `Server returned ${res.status}`);
+    log?.fail('Searching real stores', detail);
+    throw new Error(`Refine-search request failed: ${res.status} — ${detail}`);
+  }
+  log?.done('Searching real stores');
+  return (await res.json()) as DressSearchPage;
+};
+
+/**
+ * Sends an Interested/Not Interested click to the backend (mainly for
+ * server-side logging/future persistence — see routes/product-feedback.ts's
+ * doc comment for why this isn't the actual source of truth yet). Never
+ * throws — a feedback click updating the frontend's own sessionMemory (see
+ * services/shopping-session.ts) is the part that actually matters for this
+ * session; a failed background log call shouldn't block or error out the
+ * button the user just pressed.
+ */
+export const sendProductFeedback = async (
+  dress: DressResult,
+  feedbackType: ProductFeedbackType,
+  reason?: string,
+): Promise<void> => {
+  try {
+    await fetch('/api/products/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dress, feedbackType, reason }),
+    });
+  } catch {
+    // Best-effort only — see doc comment above.
+  }
 };

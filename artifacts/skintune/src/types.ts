@@ -68,3 +68,17 @@ export type ShopLink = {
   siteName: string;
   price?: string;
 };
+
+// ---- real-dress-avatar-intelligent-tryon branch ----
+//
+// Mirrors the backend's SessionMemorySchema/ProductFeedbackTypeSchema (see
+// artifacts/api-server/src/lib/skintune-schemas.ts) — "search memory" and
+// Interested/Not-Interested feedback, per this branch's product spec.
+
+export type ProductFeedbackType = 'INTERESTED' | 'NOT_INTERESTED';
+
+export type SessionMemory = {
+  seenTitles: string[];
+  rejected: Array<{ title: string; reason?: string }>;
+  interested: string[];
+};

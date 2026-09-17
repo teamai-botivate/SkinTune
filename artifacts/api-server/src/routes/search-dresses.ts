@@ -2,11 +2,18 @@ import { Router, type IRouter } from "express";
 import {
   SearchDressesRequestSchema,
   SearchDressesResponseSchema,
+  ResearchAgainRequestSchema,
+  RefineSearchRequestSchema,
   type DressResult,
   type ShopLink,
   type SkinTuneProfile,
+  type SessionMemory,
 } from "../lib/skintune-schemas";
-import { tavilySearch, type TavilyImage, type TavilyResult } from "../lib/tavily-client";
+import {
+  getSearchProvider,
+  type SearchProductCandidate,
+  type SearchPageResult,
+} from "../lib/providers/search";
 import { getOpenAIClient, RECOMMENDATION_MODEL } from "../lib/openai-client";
 import { logger } from "../lib/logger";
 
@@ -38,7 +45,22 @@ const SHOPPING_SITES = ["amazon.in", "flipkart.com", "myntra.com", "ajio.com", "
  * came back the same colour because every query, on every site and every
  * page, asked for the same one colour.
  */
-function buildSearchQuery(profile: SkinTuneProfile, colour: string, style: string): string {
+function buildSearchQuery(
+  profile: SkinTuneProfile,
+  colour: string,
+  style: string,
+  // Optional session-memory-driven additions — see ResearchAgainRequestSchema/
+  // RefineSearchRequestSchema. `refinement` is the user's own free-text
+  // steering instruction (e.g. "less expensive", "dark green instead"),
+  // appended verbatim as part of the search intent rather than parsed into
+  // structured fields — GPT-based search (see openai-web-search-provider.ts)
+  // can read and act on free text directly, unlike Tavily's plain keyword
+  // matching, so there's no need for a separate NLU step here. `avoidTitles`
+  // (rejected-product titles from memory) are named explicitly so a repeat
+  // search steers away from what's already been shown/rejected, addressing
+  // this branch's "Research Again must find NEW products" requirement.
+  memory?: { refinement?: string; avoidTitles?: string[] },
+): string {
   const normalizedPronouns = profile.pronouns.toLowerCase();
   const audience = normalizedPronouns.includes("women")
     ? "women's"
@@ -56,6 +78,10 @@ function buildSearchQuery(profile: SkinTuneProfile, colour: string, style: strin
     profile.occasion ? `${profile.occasion} clothing outfit` : "clothing outfit",
     "online",
     profile.budget ? `price ${profile.budget}` : "",
+    memory?.refinement ?? "",
+    memory?.avoidTitles?.length
+      ? `(not: ${memory.avoidTitles.slice(0, 5).join(", ")})`
+      : "",
   ].filter(Boolean);
   return parts.join(" ");
   // A real, live-reported regression: this function used to also append
@@ -98,7 +124,11 @@ type QueryTask = { site: string; colour: string; style: string };
  * lists this page starts from, so "More dresses" surfaces different
  * combinations rather than repeating page one's.
  */
-function buildQueryPlan(profile: SkinTuneProfile, page: number, taskCount: number): QueryTask[] {
+function buildQueryPlan(
+  profile: SkinTuneProfile,
+  page: number,
+  taskCount: number,
+): QueryTask[] {
   const colours = profile.colorsLove.length ? profile.colorsLove : [""];
   const styles = profile.style.length ? profile.style : [""];
   const tasks: QueryTask[] = [];
@@ -233,11 +263,16 @@ function extractPrice(content: string): string | undefined {
  * data-availability gap in what Tavily has indexed for that query, not a
  * pairing bug in this function — verify with a live query first.
  */
-function buildDressCards(images: TavilyImage[], profile: SkinTuneProfile, limit: number, idOffset: number): DressResult[] {
+function buildDressCards(
+  images: SearchProductCandidate[],
+  profile: SkinTuneProfile,
+  limit: number,
+  idOffset: number,
+): DressResult[] {
   const cards: DressResult[] = [];
   for (const image of images) {
     if (cards.length >= limit) break;
-    const host = hostnameOf(image.url);
+    const host = hostnameOf(image.imageUrl);
     if (!host) continue;
     const domain = retailerDomainOf(host);
     if (isNeverRetailerDomain(domain) || isNeverRetailerDomain(host)) continue;
@@ -245,9 +280,9 @@ function buildDressCards(images: TavilyImage[], profile: SkinTuneProfile, limit:
     cards.push({
       id: `dress-${idOffset + cards.length + 1}`,
       title: image.title || "Styled piece",
-      imageUrl: image.url,
+      imageUrl: image.imageUrl,
       siteName: siteNameFrom(domain),
-      sourceUrl: `https://${domain}`,
+      sourceUrl: image.pageUrl ?? `https://${domain}`,
     });
   }
   return cards;
@@ -343,7 +378,7 @@ function isRelevantToProfile(title: string, content: string | undefined, profile
  * snippet happened to contain one. Not tied to any specific dress photo
  * above; see this file's module doc comment.
  */
-function buildShopLinks(results: TavilyResult[], profile: SkinTuneProfile, limit: number): ShopLink[] {
+function buildShopLinks(results: SearchPageResult[], profile: SkinTuneProfile, limit: number): ShopLink[] {
   const links: ShopLink[] = [];
   const seenHosts = new Set<string>();
   for (const result of results) {
@@ -473,6 +508,115 @@ function interleave<T>(lists: T[][]): T[] {
   return merged;
 }
 
+/**
+ * Core search pipeline shared by /search-dresses, /search-dresses/research,
+ * and /search-dresses/refine — all three do the same fan-out-search ->
+ * build-cards -> filter -> dedupe pipeline, differing only in how the
+ * per-task query is built (plain profile-driven vs. memory/refinement-aware
+ * — see buildSearchQuery's `memory` parameter) and in how many candidates
+ * get excluded up front (memory.seenTitles/rejected for research/refine).
+ * Pulled into one function specifically so "Research Again"/"Refine" reuse
+ * every already-verified filtering layer (domain denylist, text relevance,
+ * vision check) rather than duplicating this pipeline three times.
+ */
+async function runDressSearch(
+  profile: SkinTuneProfile,
+  offset: number,
+  limit: number,
+  memory?: { refinement?: string; avoidTitles?: string[] },
+): Promise<{ dresses: DressResult[]; shopLinks: ShopLink[] }> {
+  const provider = getSearchProvider();
+  const page = Math.floor(offset / limit);
+
+  // One task per site (see SHOPPING_SITES), each also varying colour and
+  // style across the user's own lists — see buildQueryPlan's doc comment
+  // for why this replaced a single unscoped query (it was the root cause
+  // of both "only one site" and "only one colour" being reported live).
+  const tasks = buildQueryPlan(profile, page, SHOPPING_SITES.length);
+  const perTaskLimit = Math.max(2, Math.ceil((limit * 2) / tasks.length));
+
+  const taskResults = await Promise.allSettled(
+    tasks.map(async (task) => {
+      const query = buildSearchQuery(profile, task.colour, task.style, memory);
+      const { images, pages } = await provider.search(query, perTaskLimit * 2, [task.site]);
+      return { task, images, pages };
+    }),
+  );
+
+  const perTaskCards: DressResult[][] = [];
+  const allPages: SearchPageResult[] = [];
+  // Collected so that if EVERY task fails, the actual per-task reasons (a
+  // real provider error message, not a generic string) can be surfaced in
+  // the thrown error below — see that error's own comment for why this
+  // matters: without it, genuinely different root causes (an invalid/
+  // expired API key, a provider's own usage-cap error, a query that
+  // returns zero results) were all indistinguishable from the frontend and
+  // from this route's own logs alike.
+  const taskFailureReasons: string[] = [];
+  for (const outcome of taskResults) {
+    if (outcome.status === "rejected") {
+      logger.warn({ err: outcome.reason, provider: provider.name }, "One per-site dress search task failed; continuing with the others");
+      const reason = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+      taskFailureReasons.push(reason);
+      continue;
+    }
+    const { images, pages } = outcome.value;
+    perTaskCards.push(buildDressCards(images, profile, perTaskLimit, 0));
+    allPages.push(...pages);
+  }
+
+  // Interleave so the grid alternates across tasks (site/colour/style
+  // combinations) instead of running all of one task's cards before the
+  // next, de-duplicate by image URL (different tasks can surface the same
+  // photo, especially when several fall back to the same well-indexed
+  // site) AND by title (memory.avoidTitles — see this branch's product
+  // spec's "Research Again must find NEW products" requirement; excluding
+  // by title here is a deterministic, cheap backstop alongside the
+  // query-level `(not: ...)` hint, which is only ever a soft steer, not a
+  // guarantee, for either search provider). Collect a few more than
+  // `limit` here (candidate buffer) since the image-content check below
+  // can reject some of them — without the buffer, every rejection would
+  // just shrink the final page instead of being backfilled.
+  const seenImageUrls = new Set<string>();
+  const avoidTitlesLower = new Set((memory?.avoidTitles ?? []).map((t) => t.toLowerCase()));
+  const candidates: DressResult[] = [];
+  const candidateBuffer = limit + 6;
+  for (const dress of interleave(perTaskCards)) {
+    if (candidates.length >= candidateBuffer) break;
+    if (seenImageUrls.has(dress.imageUrl)) continue;
+    if (avoidTitlesLower.has(dress.title.toLowerCase())) continue;
+    seenImageUrls.add(dress.imageUrl);
+    candidates.push(dress);
+  }
+  // See filterByImageContent's doc comment: text filtering can't catch a
+  // mismatch that's only visible in the photo itself (e.g. a title saying
+  // "men's suit" whose actual photo shows a bride and groom together) —
+  // this is a live-reported real bug, not speculative.
+  const visuallyChecked = await filterByImageContent(candidates, profile);
+  const merged = visuallyChecked.slice(0, limit);
+  const dresses: DressResult[] = merged.map((dress, i) => ({ ...dress, id: `dress-${offset + i + 1}` }));
+  const shopLinks = buildShopLinks(allPages, profile, 8);
+
+  if (dresses.length === 0) {
+    // Include the REAL per-task failure reasons (a genuine provider error
+    // message, e.g. a 401 invalid-key or a usage-cap response) when every
+    // task actually failed, rather than only this generic sentence — a
+    // real, live-reported gap: this message used to be identical whether
+    // the cause was an invalid/expired API key, a provider's own usage
+    // cap, or a genuinely zero-result query, making it impossible to tell
+    // which from the frontend (or without separately pulling server logs)
+    // every time this was reported.
+    const detail = taskFailureReasons.length
+      ? ` Per-site errors: ${taskFailureReasons.join(" | ")}`
+      : " Every per-site task completed but returned zero usable results after filtering — this points at the search query/filters themselves, not a provider-side error.";
+    throw new Error(
+      `No real dress results found across any site for this search — every per-site task returned nothing usable.${detail}`,
+    );
+  }
+
+  return { dresses, shopLinks };
+}
+
 router.post("/search-dresses", async (req, res) => {
   const parsed = SearchDressesRequestSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -481,96 +625,16 @@ router.post("/search-dresses", async (req, res) => {
   }
 
   const { profile, offset, limit } = parsed.data;
-  const page = Math.floor(offset / limit);
 
   try {
-    // One task per site (see SHOPPING_SITES), each also varying colour and
-    // style across the user's own lists — see buildQueryPlan's doc comment
-    // for why this replaced a single unscoped query (it was the root cause
-    // of both "only one site" and "only one colour" being reported live).
-    const tasks = buildQueryPlan(profile, page, SHOPPING_SITES.length);
-    const perTaskLimit = Math.max(2, Math.ceil((limit * 2) / tasks.length));
-
-    const taskResults = await Promise.allSettled(
-      tasks.map(async (task) => {
-        const query = buildSearchQuery(profile, task.colour, task.style);
-        const { images, results } = await tavilySearch(query, perTaskLimit * 2, [task.site]);
-        return { task, images, results };
-      }),
-    );
-
-    const perTaskCards: DressResult[][] = [];
-    const allResults: TavilyResult[] = [];
-    // Collected so that if EVERY task fails, the actual per-task reasons
-    // (a real Tavily error message, not a generic string) can be surfaced
-    // in the thrown error below — see that error's own comment for why
-    // this matters: without it, genuinely different root causes (an
-    // invalid/expired TAVILY_API_KEY, Tavily's own usage-cap 432, a query
-    // that returns zero results) were all indistinguishable from the
-    // frontend and from this route's own logs alike.
-    const taskFailureReasons: string[] = [];
-    for (const outcome of taskResults) {
-      if (outcome.status === "rejected") {
-        logger.warn({ err: outcome.reason }, "One per-site dress search task failed; continuing with the others");
-        const reason = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
-        taskFailureReasons.push(reason);
-        continue;
-      }
-      const { images, results } = outcome.value;
-      perTaskCards.push(buildDressCards(images, profile, perTaskLimit, 0));
-      allResults.push(...results);
-    }
-
-    // Interleave so the grid alternates across tasks (site/colour/style
-    // combinations) instead of running all of one task's cards before the
-    // next, de-duplicate by image URL (different tasks can surface the
-    // same photo, especially when several fall back to the same
-    // well-indexed site). Collect a few more than `limit` here (candidate
-    // buffer) since the image-content check below can reject some of
-    // them — without the buffer, every rejection would just shrink the
-    // final page instead of being backfilled.
-    const seenImageUrls = new Set<string>();
-    const candidates: DressResult[] = [];
-    const candidateBuffer = limit + 6;
-    for (const dress of interleave(perTaskCards)) {
-      if (candidates.length >= candidateBuffer) break;
-      if (seenImageUrls.has(dress.imageUrl)) continue;
-      seenImageUrls.add(dress.imageUrl);
-      candidates.push(dress);
-    }
-    // See filterByImageContent's doc comment: text filtering can't catch a
-    // mismatch that's only visible in the photo itself (e.g. a title
-    // saying "men's suit" whose actual photo shows a bride and groom
-    // together) — this is a live-reported real bug, not speculative.
-    const visuallyChecked = await filterByImageContent(candidates, profile);
-    const merged = visuallyChecked.slice(0, limit);
-    const dresses: DressResult[] = merged.map((dress, i) => ({ ...dress, id: `dress-${offset + i + 1}` }));
-    const shopLinks = buildShopLinks(allResults, profile, 8);
-
-    if (dresses.length === 0) {
-      // Include the REAL per-task failure reasons (a genuine Tavily error
-      // message, e.g. a 401 invalid-key or a 432 usage-cap response — see
-      // this file's other notes on that exact 432 case) when every task
-      // actually failed, rather than only this generic sentence — a
-      // real, live-reported gap: this message used to be identical
-      // whether the cause was an invalid/expired TAVILY_API_KEY, Tavily's
-      // own usage cap, or a genuinely zero-result query, making it
-      // impossible to tell which from the frontend (or without separately
-      // pulling Render logs) every time this was reported.
-      const detail = taskFailureReasons.length
-        ? ` Per-site errors: ${taskFailureReasons.join(" | ")}`
-        : " Every per-site task completed but returned zero usable results after filtering — this points at the search query/filters themselves, not a Tavily-side error.";
-      throw new Error(
-        `No real dress results found across any site for this search — every per-site task returned nothing usable.${detail}`,
-      );
-    }
-
+    const { dresses, shopLinks } = await runDressSearch(profile, offset, limit);
     const data = SearchDressesResponseSchema.parse({
       results: dresses,
       shopLinks,
-      // Best-effort signal for whether "More" is worth showing — Tavily
-      // doesn't expose a total count, so this treats "we filled the page"
-      // as "there's probably more" rather than tracking exact availability.
+      // Best-effort signal for whether "More" is worth showing — neither
+      // search provider exposes a total count, so this treats "we filled
+      // the page" as "there's probably more" rather than tracking exact
+      // availability.
       hasMore: dresses.length >= limit,
     });
     res.json(data);
@@ -582,5 +646,69 @@ router.post("/search-dresses", async (req, res) => {
     });
   }
 });
+
+/**
+ * "Research Again" — this branch's product spec, section 25. Deliberately
+ * NOT a repeat of the same search: excludes every already-seen AND
+ * explicitly-rejected product title from the query (via buildSearchQuery's
+ * memory parameter) and from the candidate list directly (see
+ * runDressSearch's avoidTitlesLower set), so the result set is genuinely
+ * new products, not a re-shuffle of the same ones. Always starts from
+ * offset 0 — "again" means a fresh page 1 with different candidates, not
+ * pagination past what's already been shown (that's what the plain
+ * /search-dresses `offset`-based "More" button is for).
+ */
+router.post("/search-dresses/research", async (req, res) => {
+  const parsed = ResearchAgainRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid request body", details: parsed.error.flatten() });
+    return;
+  }
+  const { profile, limit, memory } = parsed.data;
+  const avoidTitles = collectAvoidTitles(memory);
+
+  try {
+    const { dresses, shopLinks } = await runDressSearch(profile, 0, limit, { avoidTitles });
+    const data = SearchDressesResponseSchema.parse({ results: dresses, shopLinks, hasMore: dresses.length >= limit });
+    res.json(data);
+  } catch (err) {
+    logger.error({ err }, "Failed to research dresses again");
+    res.status(502).json({ error: "Failed to research dresses again", message: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * "Refine Search" — this branch's product spec, section 26. Same
+ * seen/rejected exclusion as Research Again, PLUS the user's own free-text
+ * steering instruction folded directly into the search query (see
+ * buildSearchQuery's `memory.refinement`). Temporary for this session —
+ * this route never writes `refinement` back into `profile`; the caller
+ * (frontend) decides whether to persist it as a permanent preference,
+ * exactly per this branch's "custom request is temporary unless explicitly
+ * saved" rule.
+ */
+router.post("/search-dresses/refine", async (req, res) => {
+  const parsed = RefineSearchRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid request body", details: parsed.error.flatten() });
+    return;
+  }
+  const { profile, limit, memory, refinement } = parsed.data;
+  const avoidTitles = collectAvoidTitles(memory);
+
+  try {
+    const { dresses, shopLinks } = await runDressSearch(profile, 0, limit, { refinement, avoidTitles });
+    const data = SearchDressesResponseSchema.parse({ results: dresses, shopLinks, hasMore: dresses.length >= limit });
+    res.json(data);
+  } catch (err) {
+    logger.error({ err }, "Failed to refine dress search");
+    res.status(502).json({ error: "Failed to refine dress search", message: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** Merges memory.seenTitles + memory.rejected titles into one avoid-list — see runDressSearch's avoidTitlesLower set and buildSearchQuery's memory.avoidTitles parameter for how this is actually used. */
+function collectAvoidTitles(memory: SessionMemory): string[] {
+  return [...memory.seenTitles, ...memory.rejected.map((r) => r.title)];
+}
 
 export default router;

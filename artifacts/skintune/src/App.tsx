@@ -8,8 +8,10 @@ import {
   CircleHelp, Clock3, FileText, Heart, Info, LockKeyhole, Pencil, RefreshCw,
   RotateCcw, Save, ShieldCheck, Sparkles, Trash2, Upload, Wand2, X, SlidersHorizontal,
 } from 'lucide-react';
-import { searchDresses, tryOnDress } from './services/dress-search';
+import { searchDresses, tryOnDress, researchAgain, refineSearch, sendProductFeedback } from './services/dress-search';
 import { analyzePhoto } from './services/photo-analysis';
+import * as avatarService from './services/avatar';
+import { createEmptySessionMemory, recordSeen, recordInterested, recordRejected } from './services/shopping-session';
 import { createActivityLog, type LogStep } from './lib/activity-log';
 import { photoAnalysisStages, photoDiagnostics } from './data/photo-diagnostics';
 import {
@@ -18,7 +20,7 @@ import {
   impressionOptions, occasionOptions, pronounOptions,
   styleOptions, type SelectOption,
 } from './data/options';
-import type { DressResult, PhotoStatus, ShopLink, SkinTuneProfile } from './types';
+import type { DressResult, PhotoStatus, ShopLink, SkinTuneProfile, SessionMemory } from './types';
 
 const queryClient = new QueryClient();
 
@@ -522,23 +524,78 @@ function Home({ profile, savedDresses, onNew, onResults, onSettings, onQuickStar
   </main></div>;
 }
 
-function DressGrid({ profile, dresses, shopLinks, hasMore, loadingMore, loadMoreError, onViewDress, onLoadMore, onBack }: {
+function DressGrid({
+  profile, dresses, shopLinks, hasMore, loadingMore, loadMoreError, onViewDress, onLoadMore, onBack,
+  interestedTitles, rejectedTitles, onInterested, onNotInterested,
+  onResearchAgain, researchingAgain, onRefine, refining, refinementText, onRefinementTextChange,
+  avatarError,
+}: {
   profile: SkinTuneProfile; dresses: DressResult[]; shopLinks: ShopLink[]; hasMore: boolean; loadingMore: boolean; loadMoreError: string;
   onViewDress: (dress: DressResult) => void; onLoadMore: () => void; onBack: () => void;
+  interestedTitles: string[]; rejectedTitles: string[];
+  onInterested: (dress: DressResult) => void; onNotInterested: (dress: DressResult, reason?: string) => void;
+  onResearchAgain: () => void; researchingAgain: boolean;
+  onRefine: (text: string) => void; refining: boolean; refinementText: string; onRefinementTextChange: (v: string) => void;
+  avatarError: string;
 }) {
+  // Optional quick reason chips (this branch's product spec, section 23) —
+  // never a required form; a bare "Not Interested" tap with no reason still
+  // records the rejection immediately (see the button's own onClick).
+  const rejectionReasons = ['Too flashy', 'Wrong color', 'Wrong fit', 'Too expensive', 'Not my style'];
+  const [reasonPromptFor, setReasonPromptFor] = useState<string | null>(null);
+
   return <Shell profile={profile} onBack={onBack} onSettings={onBack}><div className="animate-rise">
     <div className="flex flex-wrap items-end justify-between gap-6"><div><p className="text-xs font-bold uppercase tracking-[.2em] text-primary">✨ Real Dresses For You</p><h1 className="mt-3 font-serif text-[clamp(2.8rem,6vw,5.4rem)] leading-[.9] tracking-[-.05em]">Pick one to<br /><em className="text-primary">try it on.</em></h1></div></div>
     <p className="mt-6 max-w-xl text-muted-foreground">Real pieces from real stores, matched to {profile.occasion.toLowerCase() || 'your moment'}. Tap any one to see the full piece before trying it on.</p>
-    <div className="mt-10 grid gap-6 md:grid-cols-2 lg:grid-cols-3">{dresses.map((dress) =>
-      <article key={dress.id} className="group rounded-[1.45rem] border border-border bg-card p-2 shadow-[0_8px_30px_hsl(var(--foreground)/.04)]">
+    {avatarError && <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive" data-testid="text-avatar-error">Your personal avatar couldn't be created ({avatarError}) — you can still browse, but "Try this on" won't work until this is resolved.</div>}
+
+    {/* Refine Search (this branch's product spec, section 26) — free-text steering, temporary for this session. */}
+    <div className="mt-8 flex flex-wrap items-stretch gap-2">
+      <input
+        type="text"
+        value={refinementText}
+        onChange={(e) => onRefinementTextChange(e.target.value)}
+        placeholder="Refine — e.g. more elegant, dark green, less expensive…"
+        data-testid="input-refine-search"
+        className="focus-ring min-w-0 flex-1 rounded-full border border-border bg-card px-5 py-3 text-sm outline-none placeholder:text-muted-foreground/60"
+      />
+      <button type="button" onClick={() => refinementText.trim() && onRefine(refinementText.trim())} disabled={refining || !refinementText.trim()} data-testid="button-refine-search" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-bold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60">
+        {refining ? <RefreshCw size={15} className="animate-spin" /> : <SlidersHorizontal size={15} />} Refine
+      </button>
+      <button type="button" onClick={onResearchAgain} disabled={researchingAgain} data-testid="button-research-again" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-60">
+        {researchingAgain ? <RefreshCw size={15} className="animate-spin" /> : <RotateCcw size={15} />} Research again
+      </button>
+    </div>
+
+    <div className="mt-10 grid gap-6 md:grid-cols-2 lg:grid-cols-3">{dresses.map((dress) => {
+      const isInterested = interestedTitles.includes(dress.title);
+      const isRejected = rejectedTitles.includes(dress.title);
+      return <article key={dress.id} className="group rounded-[1.45rem] border border-border bg-card p-2 shadow-[0_8px_30px_hsl(var(--foreground)/.04)]">
         <button type="button" onClick={() => onViewDress(dress)} data-testid={`card-dress-${dress.id}`} className="focus-ring block w-full text-left">
           <DressVisual dress={dress} />
           <div className="p-4 pb-3"><div className="flex items-start justify-between gap-3"><h2 className="min-w-0 font-serif text-xl leading-snug line-clamp-2">{dress.title}</h2><ChevronRight className="mt-1 shrink-0 text-muted-foreground transition group-hover:translate-x-1" size={20} /></div>
             <p className="mt-2 text-xs font-bold uppercase tracking-[.13em] text-primary">{dress.siteName}</p>
           </div>
         </button>
-      </article>
-    )}</div>
+        <div className="flex items-center gap-2 border-t border-border/70 px-3 py-2.5">
+          <button type="button" onClick={() => onInterested(dress)} disabled={isInterested} data-testid={`button-interested-${dress.id}`} className={`focus-ring inline-flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold ${isInterested ? 'bg-primary/15 text-primary' : 'bg-secondary hover:bg-secondary/80'}`}>
+            <Heart size={13} className={isInterested ? 'fill-current' : ''} /> {isInterested ? 'Interested' : 'Interested'}
+          </button>
+          {reasonPromptFor === dress.id ? (
+            <div className="flex flex-1 flex-wrap gap-1">
+              {rejectionReasons.slice(0, 2).map((r) => (
+                <button key={r} type="button" onClick={() => { onNotInterested(dress, r); setReasonPromptFor(null); }} data-testid={`button-reject-reason-${dress.id}`} className="focus-ring rounded-full bg-secondary px-2 py-1.5 text-[11px] font-semibold hover:bg-secondary/80">{r}</button>
+              ))}
+              <button type="button" onClick={() => { onNotInterested(dress); setReasonPromptFor(null); }} data-testid={`button-reject-skip-${dress.id}`} className="focus-ring rounded-full px-2 py-1.5 text-[11px] font-semibold text-muted-foreground hover:bg-secondary/60">Skip</button>
+            </div>
+          ) : (
+            <button type="button" onClick={() => setReasonPromptFor(dress.id)} disabled={isRejected} data-testid={`button-not-interested-${dress.id}`} className={`focus-ring inline-flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold ${isRejected ? 'bg-secondary/60 text-muted-foreground' : 'bg-secondary hover:bg-secondary/80'}`}>
+              <X size={13} /> Not interested
+            </button>
+          )}
+        </div>
+      </article>;
+    })}</div>
     {hasMore && <div className="mt-8 flex flex-col items-center gap-2">
       {loadMoreError && <p className="text-xs font-semibold text-destructive">{loadMoreError}</p>}
       <button type="button" onClick={onLoadMore} disabled={loadingMore} data-testid="button-load-more-dresses" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-6 py-3 text-sm font-bold hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-60">{loadingMore ? <RefreshCw size={15} className="animate-spin" /> : <ChevronDown size={15} />} {loadingMore ? 'Finding more…' : 'More dresses'}</button>
@@ -655,6 +712,24 @@ function SkinTune() {
   const [searchSteps, setSearchSteps] = useState<LogStep[]>(() => SEARCH_STEPS.map((label) => ({ label, status: 'pending' })));
   const [loadMoreError, setLoadMoreError] = useState('');
 
+  // Personal avatar (real-dress-avatar-intelligent-tryon branch) — see
+  // services/avatar.ts. `avatar` is the currently active avatar image, read
+  // once from localStorage on mount so a returning user with an existing
+  // avatar skips creation entirely (this branch's "do NOT create avatar on
+  // every login" rule) — the 'generating' effect below only calls
+  // avatarService.createAvatar() when this is still null.
+  const [avatar, setAvatar] = useState<avatarService.Avatar | null>(() => avatarService.getActiveAvatar());
+  const [avatarError, setAvatarError] = useState('');
+  // Session memory (this branch's product spec, sections 21-27) — what's
+  // been shown/liked/rejected THIS shopping session, feeding "Research
+  // Again"/"Refine Search" so they steer away from repeats. Deliberately
+  // reset to empty on every fresh search (see the 'generating' effect),
+  // never persisted — a shopping session is explicitly temporary.
+  const [sessionMemory, setSessionMemory] = useState<SessionMemory>(createEmptySessionMemory());
+  const [researchingAgain, setResearchingAgain] = useState(false);
+  const [refining, setRefining] = useState(false);
+  const [refinementText, setRefinementText] = useState('');
+
   const update = (patch: Partial<SkinTuneProfile>) => setProfile((old) => ({ ...old, ...patch }));
   const index = wizardScreens.indexOf(screen);
   const go = (next: Screen) => { setScreen(next); window.scrollTo({ top: 0, behavior: 'smooth' }); };
@@ -671,10 +746,22 @@ function SkinTune() {
     setSelectedDress(dress);
     setTryOnImageUrl('');
     setTryOnError('');
+    // Reusing the active avatar (see services/avatar.ts) instead of the raw
+    // uploaded selfie is this branch's core "avatar reuse" requirement — if
+    // it's somehow still missing at this point (avatar creation failed
+    // earlier, or the user reached try-on via some path that skipped it),
+    // fail loudly here rather than silently falling back to profile.photoUrl,
+    // since that fallback is exactly the "ask for a selfie every time"
+    // behavior this feature exists to remove.
+    if (!avatar) {
+      setTryOnError('Your personal avatar is not ready yet. Please go back and create it first.');
+      go('try-on');
+      return;
+    }
     setTryOnLoading(true);
     go('try-on');
     console.log(`[SkinTune] Starting try-on: "${dress.title}" from ${dress.siteName}`);
-    tryOnDress(dress, profile)
+    tryOnDress(dress, profile, avatar.imageUrl)
       .then((imageUrl) => { console.log('[SkinTune] Try-on complete.'); setTryOnImageUrl(imageUrl); })
       .catch((err) => {
         const detail = err instanceof Error ? err.message : String(err);
@@ -684,30 +771,102 @@ function SkinTune() {
       .finally(() => setTryOnLoading(false));
   };
 
+  const handleInterested = (dress: DressResult) => {
+    setSessionMemory((old) => recordInterested(old, dress));
+    void sendProductFeedback(dress, 'INTERESTED');
+  };
+  const handleNotInterested = (dress: DressResult, reason?: string) => {
+    setSessionMemory((old) => recordRejected(old, dress, reason));
+    void sendProductFeedback(dress, 'NOT_INTERESTED', reason);
+  };
+
+  const runResearchAgain = () => {
+    setResearchingAgain(true);
+    setLoadMoreError('');
+    researchAgain(profile, sessionMemory, DRESS_PAGE_SIZE)
+      .then((page) => {
+        setDresses(page.results);
+        setShopLinks(page.shopLinks);
+        setHasMoreDresses(page.hasMore);
+        setSessionMemory((old) => recordSeen(old, page.results));
+      })
+      .catch((err) => { const detail = err instanceof Error ? err.message : String(err); console.error('[SkinTune] Research again failed:', detail); setLoadMoreError(detail); })
+      .finally(() => setResearchingAgain(false));
+  };
+
+  const runRefineSearch = (refinement: string) => {
+    setRefining(true);
+    setLoadMoreError('');
+    refineSearch(profile, sessionMemory, refinement, DRESS_PAGE_SIZE)
+      .then((page) => {
+        setDresses(page.results);
+        setShopLinks(page.shopLinks);
+        setHasMoreDresses(page.hasMore);
+        setSessionMemory((old) => recordSeen(old, page.results));
+        setRefinementText('');
+      })
+      .catch((err) => { const detail = err instanceof Error ? err.message : String(err); console.error('[SkinTune] Refine search failed:', detail); setLoadMoreError(detail); })
+      .finally(() => setRefining(false));
+  };
+
   useEffect(() => {
     if (screen !== 'generating') return;
     let active = true;
     setSearchError('');
+    setAvatarError('');
     setSearchSteps(SEARCH_STEPS.map((label) => ({ label, status: 'pending' })));
     const log = createActivityLog(SEARCH_STEPS, (steps) => { if (active) setSearchSteps(steps); });
     console.log('[SkinTune] Starting dress search for profile:', profile.occasion || '(no occasion)', profile.style);
     log.start('Reading your profile');
     log.done('Reading your profile'); // synthetic — no separate network call, just marks the checklist's first row complete immediately
-    searchDresses(profile, 0, DRESS_PAGE_SIZE, log)
-      .then((page) => {
-        if (!active) return;
-        console.log(`[SkinTune] Search complete: ${page.results.length} dresses, ${page.shopLinks.length} shop links, hasMore=${page.hasMore}`);
-        setDresses(page.results);
-        setShopLinks(page.shopLinks);
-        setHasMoreDresses(page.hasMore);
-        go('dresses');
-      })
+
+    // Avatar creation/reuse — this branch's core "avatar reuse" requirement
+    // (see this file's App-level doc comment history / CLAUDE.md): a
+    // returning user with an already-created avatar (read once on mount —
+    // see the `avatar` useState initializer) skips creation ENTIRELY here,
+    // going straight to search. Only a first-time user (or one whose
+    // profile.photoUrl changed since the avatar was made — see the `!avatar`
+    // check) triggers a real POST /api/avatar/create call, and even then
+    // only ONCE per profile, never per dress (that's the whole point).
+    const ensureAvatar = avatar
+      ? Promise.resolve(avatar)
+      : avatarService.createAvatar(profile.photoUrl, profile).then((created) => {
+          if (!active) return created;
+          avatarService.saveAsFirstVersion(created);
+          setAvatar(created);
+          return created;
+        });
+
+    ensureAvatar
       .catch((err) => {
-        if (!active) return;
+        // Avatar creation failing should NOT block dress search — the user
+        // can still browse and see real dresses; they just can't try one
+        // on until the avatar issue is resolved (surfaced on the dresses
+        // screen via avatarError, not as a hard blocker here).
         const detail = err instanceof Error ? err.message : String(err);
-        console.error('[SkinTune] Dress search failed:', detail);
-        setSearchError(detail);
-      });
+        console.error('[SkinTune] Avatar creation failed:', detail);
+        if (active) setAvatarError(detail);
+        return null;
+      })
+      .then(() =>
+        searchDresses(profile, 0, DRESS_PAGE_SIZE, log)
+          .then((page) => {
+            if (!active) return;
+            console.log(`[SkinTune] Search complete: ${page.results.length} dresses, ${page.shopLinks.length} shop links, hasMore=${page.hasMore}`);
+            setDresses(page.results);
+            setShopLinks(page.shopLinks);
+            setHasMoreDresses(page.hasMore);
+            setSessionMemory(createEmptySessionMemory());
+            setSessionMemory((old) => recordSeen(old, page.results));
+            go('dresses');
+          })
+          .catch((err) => {
+            if (!active) return;
+            const detail = err instanceof Error ? err.message : String(err);
+            console.error('[SkinTune] Dress search failed:', detail);
+            setSearchError(detail);
+          }),
+      );
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: search begins once per entry into this screen (searchAttempt bumps to retry)
   }, [screen, searchAttempt]);
@@ -724,10 +883,16 @@ function SkinTune() {
     setLoadingMoreDresses(true);
     setLoadMoreError('');
     searchDresses(profile, dresses.length, DRESS_PAGE_SIZE)
-      .then((page) => { setDresses((old) => [...old, ...page.results]); setHasMoreDresses(page.hasMore); })
+      .then((page) => { setDresses((old) => [...old, ...page.results]); setHasMoreDresses(page.hasMore); setSessionMemory((old) => recordSeen(old, page.results)); })
       .catch((err) => { const detail = err instanceof Error ? err.message : String(err); console.error('[SkinTune] Load more dresses failed:', detail); setLoadMoreError(detail); })
       .finally(() => setLoadingMoreDresses(false));
-  }} onBack={() => go('home')} />;
+  }} onBack={() => go('home')}
+    interestedTitles={sessionMemory.interested} rejectedTitles={sessionMemory.rejected.map((r) => r.title)}
+    onInterested={handleInterested} onNotInterested={handleNotInterested}
+    onResearchAgain={runResearchAgain} researchingAgain={researchingAgain}
+    onRefine={runRefineSearch} refining={refining} refinementText={refinementText} onRefinementTextChange={setRefinementText}
+    avatarError={avatarError}
+  />;
   if (screen === 'dress-detail' && selectedDress) return <DressDetail dress={selectedDress} onBack={back} onTryOn={() => runTryOn(selectedDress)} />;
   if (screen === 'try-on' && selectedDress) return <TryOn dress={selectedDress} profile={profile} imageUrl={tryOnImageUrl} loading={tryOnLoading} error={tryOnError} saved={isDressSaved(selectedDress.id)} onSave={() => setSavedDresses((old) => isDressSaved(selectedDress.id) ? old.filter((item) => item.dress.id !== selectedDress.id) : [...old, { dress: selectedDress, imageUrl: tryOnImageUrl }])} onBack={back} onTryAnother={() => go('dresses')} onRetry={() => runTryOn(selectedDress)} />;
   if (screen === 'generating') return <Generating steps={searchSteps} error={searchError} onRetry={() => setSearchAttempt((v) => v + 1)} onBack={() => go(profile.name ? 'home' : 'welcome')} />;

@@ -235,9 +235,104 @@ export const SearchDressesResponseSchema = z.object({
 export const TryOnRequestSchema = z.object({
   dress: DressResultSchema,
   profile: SkinTuneProfileSchema,
+  // Historically the user's raw selfie. On this branch it should now be the
+  // user's ACTIVE AVATAR image (see /api/avatar/create below) instead — the
+  // avatar is itself already an identity-preserving full-length photo, so
+  // reusing it here means try-on never needs to re-derive identity/build
+  // framing from a raw close-up selfie for every single dress. The field
+  // name/shape is unchanged (still just a data: URL) so this is a pure
+  // caller-side swap, not a schema change — see CLAUDE.md for the full
+  // avatar-reuse rationale.
   photoUrl: z.string().min(1), // required here — there is no "no photo" fallback for a real try-on
 });
 
 export const TryOnResponseSchema = z.object({
   imageUrl: z.string(),
+});
+
+// ---- /api/avatar (avatar creation/versioning — real-dress-avatar-intelligent-tryon branch) ----
+//
+// See CLAUDE.md for full rationale. No auth/accounts exist in this codebase
+// (confirmed by inspection before this branch was started, and per explicit
+// product direction: "no auth now") — so "the user" here is scoped to
+// whatever device/browser is calling this API, the same implicit scoping
+// every other route on this branch already uses via localStorage. There is
+// no user_id anywhere in these schemas; if real accounts are added later,
+// that's a genuinely separate project (auth + a real database), not a
+// small addition to this one.
+
+export const AvatarCreateRequestSchema = z.object({
+  // The user's raw uploaded selfie (base64 data URL) — the one-time input
+  // this whole avatar exists to avoid needing again for every dress.
+  photoUrl: z.string().min(1),
+  profile: SkinTuneProfileSchema,
+});
+
+export const AvatarSchema = z.object({
+  id: z.string(),
+  imageUrl: z.string(), // the generated avatar photo (base64 data URL)
+  createdAt: z.string(), // ISO timestamp
+  active: z.boolean(),
+});
+export type Avatar = z.infer<typeof AvatarSchema>;
+
+export const AvatarCreateResponseSchema = z.object({
+  avatar: AvatarSchema,
+});
+
+// ---- /api/products/feedback (Interested / Not Interested) ----
+
+export const ProductFeedbackTypeSchema = z.enum(["INTERESTED", "NOT_INTERESTED"]);
+
+export const ProductFeedbackRequestSchema = z.object({
+  dress: DressResultSchema,
+  feedbackType: ProductFeedbackTypeSchema,
+  // Optional quick rejection reason (see CLAUDE.md's "OPTIONAL REJECTION
+  // REASON" section of the product spec) — never required, a NOT_INTERESTED
+  // click is recorded even with no reason given.
+  reason: z.string().optional(),
+  sessionId: z.string().optional(),
+});
+
+// ---- /api/search-dresses/research and /refine (session-aware re-search) ----
+//
+// Both extend the base SearchDressesRequestSchema with the session-memory
+// fields described in this branch's product spec: what's already been
+// shown/rejected/liked, and (for refine) a free-text steering instruction.
+// Deliberately NOT sent as a giant history blob — see buildSearchQuery in
+// search-dresses.ts for how this gets folded into one query, not replayed
+// verbatim to the model.
+
+export const SessionMemorySchema = z.object({
+  // Titles/domains of dresses already shown this session — used to steer
+  // away from repeats, not sent as full DressResult objects (keeps the
+  // request small; a title/domain pair is enough of a fingerprint for the
+  // "don't just repeat page one" instruction this feeds into).
+  seenTitles: z.array(z.string()).default([]),
+  // Titles of dresses the user explicitly rejected, WITH the optional
+  // reason if one was given — this is the actual negative-preference
+  // signal, kept separate from seenTitles because a merely-unseen-again
+  // product isn't the same signal as an actively-disliked one.
+  rejected: z.array(z.object({ title: z.string(), reason: z.string().optional() })).default([]),
+  // Titles the user explicitly liked — a soft positive signal, used the
+  // same way (steer toward more like these), never a hard requirement.
+  interested: z.array(z.string()).default([]),
+});
+export type SessionMemory = z.infer<typeof SessionMemorySchema>;
+
+export const ResearchAgainRequestSchema = z.object({
+  profile: SkinTuneProfileSchema,
+  limit: z.number().int().min(1).max(20).default(10),
+  memory: SessionMemorySchema,
+});
+
+export const RefineSearchRequestSchema = z.object({
+  profile: SkinTuneProfileSchema,
+  limit: z.number().int().min(1).max(20).default(10),
+  memory: SessionMemorySchema,
+  // Free-text steering instruction, e.g. "show me more elegant options",
+  // "now find something in dark green", "less expensive" — see this
+  // branch's product spec's "SEARCH REFINEMENT" section. Temporary for
+  // this session only; never written back into `profile`.
+  refinement: z.string().min(1).max(300),
 });

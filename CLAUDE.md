@@ -2047,3 +2047,238 @@ form again, the two content-cutting approaches already worked and stayed;
 don't re-attempt screen-merging as the default lever without checking
 first whether the user specifically wants fewer taps or fewer/lighter
 screens — those are different asks with different answers here.
+
+## `real-dress-avatar-intelligent-tryon` branch — personal avatar reuse + GPT-based search + session memory
+
+Forked from `real-dress-search` (not `main`) per an explicit, large product
+spec asking for: a persistent reusable personal avatar (no selfie every
+try-on), GPT-5.6-Terra as the reasoning brain, OpenAI Web Search replacing
+Tavily as the default search provider, Interested/Not-Interested feedback
+with session memory, "Research Again"/"Refine Search", and a fast VTO
+provider (FASHN) with dynamic (never hardcoded) styling. `real-dress-search`
+itself was left completely untouched — this is a new branch built on top of
+it, not a modification of it.
+
+**Before writing any code, the actual repo was inspected and several of the
+spec's assumptions turned out to be false for this codebase — this section
+documents exactly what was built, what was deliberately deferred (and why),
+and what would need to happen next for the rest of the spec.**
+
+### What was actually verified vs. assumed
+
+- **No auth, no database, no file storage exist anywhere in this repo.**
+  `lib/db/schema/index.ts` is an empty template that was never used; there
+  is no Postgres/Supabase connection anywhere; the only persistence
+  anywhere in this app is `localStorage`. The spec's sections on
+  users/user_profiles/avatars/avatar_versions/shopping_sessions/
+  product_feedback DB tables, Supabase Storage paths, and login/signup
+  flows all assume infrastructure that doesn't exist — building that for
+  real (a real auth system + a real database + real storage with signed
+  URLs) is a genuinely separate, multi-day backend project on its own, not
+  something to sketch in alongside the AI/search/avatar work in one pass.
+  **The user was asked directly rather than this being assumed either
+  way, and confirmed: "no auth now."** So this branch keeps the existing
+  app's "one implicit user per browser" model (the same pattern
+  `skintune-profile`/`skintune-saved-looks` already use) for every new
+  piece of state (avatar, session memory) — see `services/avatar.ts` and
+  `services/shopping-session.ts`'s doc comments for exactly where a real
+  backend would plug in later without changing the calling code.
+- **`gpt-5.6-terra` and `gpt-6-astra` are not verifiable model IDs from
+  inside this session** — there is no live web access here to check
+  current OpenAI documentation, and fabricating a model ID (or an
+  invented FASHN API endpoint/schema) would violate the spec's own "do
+  not invent" rules more seriously than declining to hardcode one. The
+  user was asked directly and said "use best according to u." Decision
+  made: keep `gpt-5.5` (this codebase's already-confirmed-working model —
+  see the extensive live-verification notes on `openai-client.ts`
+  elsewhere in this file) as the default, behind a renamed, more
+  general-purpose env var (`OPENAI_REASONING_MODEL`, with
+  `OPENAI_TEXT_MODEL` kept as a fallback alias so nothing already
+  deployed breaks) plus an unused-but-present
+  `OPENAI_REASONING_FALLBACK_MODEL` scaffold — see `openai-client.ts`'s
+  updated doc comment. Swapping to a real, confirmed `gpt-5.6-terra` (or
+  any other model) later is a one-line env var change, not a code change
+  — but do NOT set it to an unverified model name without first
+  confirming live against the OpenAI API that it exists and is available
+  on the account being used, the exact same discipline this file's
+  existing gpt-4o-vs-gpt-5.5 history already established.
+- **OpenAI's Responses API `web_search` tool is real** — this was
+  actually verified, not assumed, directly against the currently
+  installed `openai` npm package's own shipped type definitions
+  (`node_modules/openai/resources/responses/responses.d.ts`): `WebSearchTool`
+  with `type: 'web_search' | 'web_search_2025_08_26'` is part of the
+  `Tool` union `openai.responses.create` accepts, and `output_text`/
+  `text: { format: { type: 'json_schema', ... } }` are both real,
+  typed members of that same SDK version (v6.49.0 at the time this was
+  written). See `lib/providers/search/openai-web-search-provider.ts`'s
+  doc comment for the exact verification method — re-verify against the
+  new version's own `.d.ts` file the same way if this SDK is ever
+  upgraded, rather than assuming the shape stayed the same.
+- **FASHN's exact API (endpoints, request/response fields) could not be
+  verified from this session** — no live web access, and the spec itself
+  explicitly says not to invent endpoints. Rather than fabricate a
+  `FashnTryOnProvider` against a guessed schema, this was explicitly
+  deferred (see below) — the existing, already-verified `gpt-image-2`
+  try-on machinery in `try-on.ts` was kept instead, with avatar reuse
+  layered on top of it.
+
+### What was built
+
+1. **`lib/providers/search/`** — a real `SearchProvider` abstraction
+   (`search-provider.ts`) with two implementations:
+   `OpenAiWebSearchProvider` (default — the real `web_search` tool,
+   verified as above) and `LegacyTavilySearchProvider` (wraps the
+   original `real-dress-search` branch's `tavily-client.ts` unchanged).
+   Selected via `SEARCH_PROVIDER` env var ("openai" | "tavily"),
+   defaulting to "openai" per the spec's explicit direction. `tavily-client.ts`
+   itself was NOT deleted or modified — it's still exactly what
+   `real-dress-search` shipped, just now optional rather than the only
+   option.
+2. **`routes/search-dresses.ts` refactored, not rewritten** — its entire
+   existing filtering pipeline (the domain denylist, the text-relevance
+   filter, the vision-based accessory/couple-photo check, the
+   interleaving/de-duplication logic — all of it real, live-verified work
+   from `real-dress-search`'s own history) is unchanged and now shared by
+   THREE routes via a new `runDressSearch` helper: the original
+   `POST /api/search-dresses`, a new `POST /api/search-dresses/research`
+   ("Research Again" — excludes every seen/rejected title, always starts
+   fresh at offset 0), and a new `POST /api/search-dresses/refine`
+   ("Refine Search" — same exclusion plus the user's free-text steering
+   instruction folded directly into the query, since GPT-based search can
+   read and act on free text natively, unlike Tavily's plain keyword
+   matching). `buildSearchQuery` gained an optional `memory` parameter
+   (`refinement` text + `avoidTitles`) rather than these three routes each
+   reimplementing query construction — see that function's updated doc
+   comment. **Per this file's own hard-won lesson from `real-dress-search`
+   ("don't ship a query-construction change without live-testing it")**:
+   the `(not: title1, title2, ...)` exclusion clause added to the query
+   string was modeled after — not copied from — the exact `-term`
+   exclusion approach that broke production once already on the parent
+   branch; it was deliberately kept SHORT (max 5 titles) and phrased as a
+   soft parenthetical rather than a long stack of `-term` tokens, but this
+   was NOT independently live-tested in this session (no API key
+   available) — if "Research Again"/"Refine" are ever reported as
+   returning zero results, check this exclusion clause first before
+   assuming the rest of the pipeline is at fault.
+3. **`routes/avatar.ts`** — `POST /api/avatar/create`. This is genuinely
+   `try-on.ts`'s own identity-preservation machinery (the itemized
+   face-feature list, explicit build preservation, anti-cut-paste
+   instruction, full-length head-to-body size-ratio fix — every hard-won
+   lesson from that file's 9-round history) reused for a DRESS-FREE case:
+   turning a raw selfie into one clean, full-length, neutrally-dressed
+   reference photo that later becomes the "identity photo" for every
+   try-on, instead of the raw selfie itself. Same Responses API primary /
+   `images.edit` fallback pattern as every other image route in this
+   codebase. Per the "nothing hardcoded" product rule, the only thing
+   fixed in `buildAvatarPrompt` is identity/build preservation and the
+   fact that it's a neutral, reusable base photo (simple clothing, plain
+   background) — everything about HOW that's rendered is still the
+   model's own decision, not a template.
+4. **Avatar reuse, the actual point of all this** —
+   `services/avatar.ts` (frontend) persists the created avatar to
+   `localStorage` (versioned: `saveAsFirstVersion` for first-time
+   creation, `saveAsNewActiveVersion` for "recreate" without destroying
+   history — see this branch's spec section 7) and `App.tsx`'s
+   `generating` screen effect now creates the avatar ONCE (only if
+   `getActiveAvatar()` returned null on mount — a returning user with an
+   existing avatar skips this call entirely, going straight to search,
+   per the spec's explicit "do NOT create avatar on every login" rule)
+   before running the dress search. `runTryOn` now sends
+   `avatar.imageUrl` to `/api/try-on`, not `profile.photoUrl` — every
+   dress a user tries on reuses that ONE avatar image, never
+   re-generating it per dress (spec section 30). If avatar creation fails,
+   the search still proceeds (browsing isn't blocked), but `avatarError`
+   is surfaced on the dress grid and `runTryOn` refuses to proceed with a
+   clear message rather than silently falling back to the raw selfie —
+   that fallback would defeat the entire point of this feature.
+5. **Interested/Not Interested + session memory** —
+   `services/shopping-session.ts` (frontend, in-memory `SessionMemory`:
+   `seenTitles`/`rejected` with optional reason/`interested`) and
+   `routes/product-feedback.ts` (backend, `POST /api/products/feedback`
+   — logs the feedback server-side; NOT the actual source of truth since
+   there's no database, see that route's doc comment for exactly what a
+   real persistence layer would replace here). `DressGrid` now shows
+   Interested/Not-Interested buttons per card (Not Interested offers two
+   quick reason chips + a Skip, never a required form — spec section 23),
+   and both a "Research Again" button and a free-text "Refine" input,
+   both wired to the new backend routes with the current `sessionMemory`
+   attached.
+6. **Model configuration centralized** — `openai-client.ts`'s
+   `RECOMMENDATION_MODEL` now reads `OPENAI_REASONING_MODEL` first (falling
+   back to the existing `OPENAI_TEXT_MODEL` for compatibility), and a new
+   unused-for-now `RECOMMENDATION_FALLBACK_MODEL` constant reads
+   `OPENAI_REASONING_FALLBACK_MODEL` — scaffolding for a fallback path, not
+   wired into any caller yet since none of this branch's routes need one to
+   meet the spec's actual acceptance criteria.
+
+### What was explicitly deferred (not stubbed with fake behavior, not silently skipped either)
+
+- **Real user accounts, a real database, real file storage.** As covered
+  above — this needs its own dedicated project (pick an auth provider,
+  design real schema/migrations, wire real storage with signed URLs) once
+  the product direction on accounts is actually decided. Nothing in this
+  branch pretends this exists; every new piece of state is explicitly
+  scoped to "this browser," matching the app's existing pattern honestly
+  rather than half-building a fake multi-user system.
+- **FASHN (or any dedicated) VTO provider swap.** `try-on.ts` is
+  unchanged — still the same verified `gpt-image-2` Responses-API-primary/
+  `images.edit`-fallback pipeline `real-dress-search` already had, now
+  just fed the avatar image instead of the raw selfie. A `VTOProvider`
+  abstraction analogous to `SearchProvider` would be the right shape to
+  add FASHN behind later, once its real API is actually verified (docs +
+  credentials) — do not build `FashnTryOnProvider` against a guessed
+  schema; get the real docs first.
+- **`gpt-5.6-terra` as an actually-used model.** Config is ready
+  (`OPENAI_REASONING_MODEL`) but the value itself is still `gpt-5.5` — see
+  above for why. Flip the env var once the real model ID is confirmed
+  live against the account's own API access; no code change needed.
+- **Occasion-based home screen + dynamic per-occasion wizard (spec
+  sections 11, 42-43).** This is a genuinely large, separate UI redesign
+  (reworking the entire onboarding flow's information architecture, not
+  an incremental addition) — deliberately not attempted in the same pass
+  as the avatar/search/feedback backend work above, to avoid delivering a
+  shallow, half-working version of everything instead of a few things
+  that actually work end to end. The existing single wizard (name →
+  profile → age → height → consent → photo → appearance → 3 preference
+  sections → review) is unchanged. If this is wanted next, it's its own
+  focused pass.
+- **A structured "search intent" JSON object as a formal artifact (spec
+  section 14).** The OpenAI web-search provider still builds one text
+  query per site/colour/style combination (same shape as the existing
+  Tavily-based query construction, extended with the `memory` parameter)
+  rather than first generating and persisting a structured intent object
+  separately. The model IS reasoning about the request (via the prompt
+  inside `openai-web-search-provider.ts`), just not through a
+  separately-exposed intermediate schema — revisit if a caller ever
+  actually needs to inspect/reuse that intent independent of the search
+  call itself.
+- **Try-on result caching (spec section 37) and image
+  resize/compression before sending to providers (spec section 52).**
+  Not implemented this pass — every try-on still calls the image model
+  fresh, and photos are sent as full base64 data URLs, same as
+  `real-dress-search` already did. Worth adding once real usage patterns
+  show it's needed; premature caching without real usage data risks
+  solving the wrong problem.
+- **Tests.** This repo has no test suite (see this file's existing
+  "Working conventions" note) — verification for this branch is
+  `pnpm run typecheck` (whole workspace, passes) and both `build` scripts
+  (both pass), the same bar every other change in this file has been held
+  to. No new test infrastructure was introduced in this pass.
+
+### Verification performed
+
+`pnpm run typecheck` (whole workspace) and
+`pnpm --filter @workspace/api-server run build` /
+`PORT=5173 BASE_PATH=/ pnpm --filter @workspace/skintune run build` all
+pass. **None of the new AI-calling code (avatar creation, the OpenAI
+web-search provider, research/refine) was live-tested against a real
+OpenAI API key in this session** — no key was available. Before relying
+on this in production: run one real avatar creation, one real search
+through the new default provider, and one real "Research Again"/"Refine"
+call against a live key, and check server logs for the same class of
+issue this file's `real-dress-search` history repeatedly found in similar
+new code (empty structured-output responses from `gpt-5.5`'s reasoning-
+token budget — the new `openai-web-search-provider.ts` call uses
+`max_output_tokens: 4000`, sized generously per that established lesson,
+but has not been confirmed sufficient against a real multi-page web
+search).

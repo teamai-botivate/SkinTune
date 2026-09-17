@@ -6,6 +6,8 @@ import refineImageRouter from "./refine-image";
 import analyzePhotoRouter from "./analyze-photo";
 import searchDressesRouter from "./search-dresses";
 import tryOnRouter from "./try-on";
+import avatarRouter from "./avatar";
+import productFeedbackRouter from "./product-feedback";
 
 const router: IRouter = Router();
 
@@ -18,5 +20,9 @@ router.use(analyzePhotoRouter);
 // web-sourced dresses + a gpt-image-2 try-on — see CLAUDE.md.
 router.use(searchDressesRouter);
 router.use(tryOnRouter);
+// real-dress-avatar-intelligent-tryon branch: persistent reusable avatar +
+// Interested/Not-Interested feedback — see CLAUDE.md.
+router.use(avatarRouter);
+router.use(productFeedbackRouter);
 
 export default router;
