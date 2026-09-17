@@ -2220,14 +2220,6 @@ and what would need to happen next for the rest of the spec.**
   branch pretends this exists; every new piece of state is explicitly
   scoped to "this browser," matching the app's existing pattern honestly
   rather than half-building a fake multi-user system.
-- **FASHN (or any dedicated) VTO provider swap.** `try-on.ts` is
-  unchanged — still the same verified `gpt-image-2` Responses-API-primary/
-  `images.edit`-fallback pipeline `real-dress-search` already had, now
-  just fed the avatar image instead of the raw selfie. A `VTOProvider`
-  abstraction analogous to `SearchProvider` would be the right shape to
-  add FASHN behind later, once its real API is actually verified (docs +
-  credentials) — do not build `FashnTryOnProvider` against a guessed
-  schema; get the real docs first.
 - **`gpt-5.6-terra` as an actually-used model.** Config is ready
   (`OPENAI_REASONING_MODEL`) but the value itself is still `gpt-5.5` — see
   above for why. Flip the env var once the real model ID is confirmed
@@ -2282,3 +2274,71 @@ token budget — the new `openai-web-search-provider.ts` call uses
 `max_output_tokens: 4000`, sized generously per that established lesson,
 but has not been confirmed sufficient against a real multi-page web
 search).
+
+### Follow-up: FASHN VTO provider actually implemented (was deferred above, now built)
+
+The user asked directly what happened to FASHN after the initial pass
+above deferred it. Rather than leave it deferred, the user provided the
+real FASHN documentation (both by pasting the docs site's own Introduction
+page directly, and by confirming the web-search tool was available in
+this session) — this follow-up used that access to actually verify FASHN's
+real API (not the spec's guessed shape) directly against
+`https://docs.fashn.ai`'s own reference pages before writing any code, the
+same "verify, don't invent" discipline this branch's CLAUDE.md section
+already established for the OpenAI `web_search` tool.
+
+**What was verified, and how** (see `lib/providers/vto/fashn-vto-provider.ts`'s
+own doc comment for the full citation list): base URL
+(`https://api.fashn.ai`), auth header (`Authorization: Bearer <key>`), the
+`POST /v1/run` request shape (`{model_name, inputs}`), the exact `inputs`
+field lists for both `face-to-model` (`face_image` required;
+`prompt`/`aspect_ratio`/`resolution`/`generation_mode`/`seed`/
+`num_images`/`output_format`/`return_base64` optional) and `tryon-max`
+(`product_image` + `model_image` required, same optional fields as above),
+the five documented prediction status values (`starting`/`in_queue`/
+`processing`/`completed`/`failed`), and — importantly, since it was easy
+to assume otherwise — that **the two endpoints' response shapes genuinely
+differ**: `face-to-model` returns `{"output": {"images": [...]}}` (nested)
+while `tryon-max` returns `{"output": [...]}` (a flat array). This
+asymmetry was caught by reading both reference pages directly rather than
+assuming one endpoint's shape for the other. The exact `GET /v1/status/{id}`
+polling path was confirmed with slightly less direct certainty than
+everything else — no single page happened to show a full curl example for
+it, but it appears verbatim inside the error-handling page's own worked
+example describing how a failed prediction is polled. If a live FASHN call
+ever 404s specifically on the status poll, re-check that one path against
+the live docs first; everything else here has a direct page-level citation.
+
+**What was built**: `lib/providers/vto/` — a `VtoProvider` abstraction
+(`vto-provider.ts`) mirroring the `SearchProvider` pattern already
+established for the search side of this branch, with two
+implementations: `OpenAiImageProvider` (default — the exact
+already-verified OpenAI Responses-API/`images.edit` mechanism this branch
+originally shipped, moved here unchanged, not rewritten) and
+`FashnVtoProvider` (the real FASHN endpoints above, opt-in via
+`VTO_PROVIDER=fashn` + a new `FASHN_API_KEY` env var). `routes/avatar.ts`
+and `routes/try-on.ts` were both simplified to just call
+`getVtoProvider().generateAvatar(...)`/`.generateTryOn(...)` — neither
+route knows or cares which provider is actually running underneath.
+
+**The original OpenAI prompt logic was extracted verbatim, not
+reworded**, into `lib/prompts/avatar-prompt.ts` and
+`lib/prompts/try-on-prompt.ts` specifically so moving it behind the new
+abstraction carried zero risk of silently changing wording from this
+branch's (and `real-dress-search`'s) many rounds of live-verified prompt
+fixes — every sentence in `try-on-prompt.ts` in particular exists because
+of a specific documented failure mode (cut-paste faces, copied
+product-photo poses, oversized heads, etc.); see this file's extensive
+`real-dress-search` history above before touching that text again.
+
+**Not independently live-verified against a real FASHN account in this
+session** — no `FASHN_API_KEY` was available. `OpenAiImageProvider`
+remains the default specifically so nothing regresses for anyone who
+hasn't set up FASHN; typecheck and build both pass for both providers,
+but only the OpenAI path has ever been live-tested end to end (in earlier
+rounds on `real-dress-search`). Before switching a real deployment to
+`VTO_PROVIDER=fashn`: run one real avatar creation and one real try-on
+against a live FASHN key, and if either the status-poll path or either
+endpoint's response-shape assumption above turns out wrong, that's the
+first place to check — not the surrounding route code, which is unchanged
+from the already-working OpenAI path structurally.

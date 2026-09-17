@@ -1,360 +1,25 @@
 import { Router, type IRouter } from "express";
-import { toFile } from "openai";
-import {
-  TryOnRequestSchema,
-  TryOnResponseSchema,
-  type DressResult,
-  type SkinTuneProfile,
-} from "../lib/skintune-schemas";
-import { getOpenAIClient, IMAGE_MODEL, RECOMMENDATION_MODEL } from "../lib/openai-client";
+import { TryOnRequestSchema, TryOnResponseSchema } from "../lib/skintune-schemas";
+import { getVtoProvider } from "../lib/providers/vto";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
 /**
- * Structured output of writeTryOnAddendum() below — mirrors
- * generate-image.ts's StylingAddendum pattern (see that file's extensive
- * doc comments for why this is structured JSON rather than free prose, and
- * why nothing here is a fixed template). Every field is a fresh decision
- * from actually looking at the person's photo AND the real dress photo
- * together — there is no fallback template with real content; if this
- * agent fails, buildTryOnPrompt() only gets one neutral placeholder
- * sentence, never a hardcoded styling decision.
+ * Try-on: takes the user's ACTIVE AVATAR (see routes/avatar.ts and
+ * services/avatar.ts's doc comments — the frontend now sends its avatar
+ * image here as `photoUrl`, not the raw selfie) plus one real dress the
+ * user picked, and generates one image of that avatar wearing that exact
+ * garment.
+ *
+ * The actual image-generation mechanism now lives behind the VtoProvider
+ * abstraction (lib/providers/vto/) — see that module's doc comment for
+ * why: this branch's product spec asked for a specialized VTO provider
+ * (FASHN) alongside the option to keep using this branch's original,
+ * already-verified OpenAI-based mechanism. VTO_PROVIDER env var selects
+ * which one actually runs; this route itself no longer knows or cares
+ * which provider is active.
  */
-type TryOnAddendum = {
-  expression: string;
-  headAndCameraAngle: string;
-  bodyLanguage: string;
-  environmentAndSetting: string;
-  fitNotes: string;
-  hairstyleRendering: string;
-  flatteringDirection: string;
-};
-
-const TRY_ON_ADDENDUM_JSON_SCHEMA = {
-  type: "object",
-  properties: {
-    expression: { type: "string", description: "A specific, concrete, genuinely confident and flattering facial expression for this shot, matching this dress's mood — not generic, and NOT simply whatever expression the person happened to have in their own casual reference photo (which may be flat, tired, or off-guard). Direct them the way a real photographer would coach a subject to look their best for this specific shot." },
-    headAndCameraAngle: { type: "string", description: "Camera height and head angle/tilt for this specific shot — must differ from a plain straight-on head-level shot unless that genuinely suits this dress and occasion." },
-    bodyLanguage: { type: "string", description: "How the body, shoulders, hands, and weight are positioned — concrete and specific to this dress's mood, not a stiff standing-still default." },
-    environmentAndSetting: { type: "string", description: "A specific background/setting/lighting that genuinely fits this exact dress and the person's stated occasion — reasoned fresh, not a stock choice." },
-    fitNotes: { type: "string", description: "How this exact dress (as seen in its real product photo) should drape and fit this specific person's actual visible build/proportions from their photo." },
-    hairstyleRendering: { type: "string", description: "A concrete, specific styling decision for the hair in this shot — genuinely reasoned from this person's real hair length/texture/type as seen in their photo and what would look best groomed and styled for this exact dress and occasion (e.g. neater and more polished for a formal look, textured and relaxed for casual). Do not default to simply describing the hair exactly as it looks in the input photo — decide how a stylist would groom and present it for THIS shoot, even if that's a genuinely different look (different length, texture treatment, or styling) from their everyday appearance. State the specific styling choice, not a vague 'well-groomed hair'." },
-    flatteringDirection: { type: "string", description: "1-2 sentences of concrete, non-generic reasoning about what will make THIS specific person look genuinely great wearing THIS specific garment — based on what you can actually see in their photo (their features, coloring, build) and this garment's actual cut/colour, not a generic 'confident and radiant' line reused across every try-on." },
-  },
-  required: ["expression", "headAndCameraAngle", "bodyLanguage", "environmentAndSetting", "fitNotes", "hairstyleRendering", "flatteringDirection"],
-  additionalProperties: false,
-} as const;
-
-/**
- * Vision agent that looks at BOTH the user's own photo and the real dress's
- * product photo together, and decides pose/expression/setting/fit — same
- * "let the AI genuinely decide, nothing hardcoded" principle as
- * generate-image.ts's writeStylingAddendum. This is the only source of
- * styling direction in this route; there is no keyword-matched or
- * gender-branched template anywhere in this file.
- */
-async function writeTryOnAddendum(
-  openai: ReturnType<typeof getOpenAIClient>,
-  dress: DressResult,
-  profile: SkinTuneProfile,
-  photoUrl: string,
-): Promise<TryOnAddendum | null> {
-  try {
-    const completion = await openai.chat.completions.create({
-      model: RECOMMENDATION_MODEL,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are a fashion photographer directing a virtual try-on shoot — the kind of natural, well-composed \"outfit change\" edit popular on Instagram/Reels, where the same real person appears in a new outfit but the photo looks like a genuine, freshly-taken, professionally shot photograph, never a lightly-touched-up copy of their original selfie. You are shown two images: a real person's own photo (very often a casual, off-guard phone selfie — flat lighting, a neutral or tired expression, an awkward low angle, not their best moment) and a real product photo of a specific dress/outfit they want to try on (typically showing a DIFFERENT model, in the store's own pose, setting, and background — none of that belongs in your output; only the garment itself does). Your job is to genuinely study both — this person's underlying face shape and features, their build, and this exact garment's cut, colour, and mood — and decide, like a photographer directing a real shoot, the facial expression, head/camera angle, body language, background/setting, hairstyle, how this specific garment should drape on this specific body, and concretely what will make THIS specific person look genuinely great in THIS specific garment (not a generic 'confident and radiant' line — real reasoning from their actual features, coloring, and build together with this garment's actual cut and colour). This is a full re-styling for a new shoot, not a light touch-up on the input photo, and it is also NOT a recreation of the product photo's own shoot — the pose, expression, hair, and setting should all genuinely change from whatever they were in EITHER reference photo; you are directing an entirely new, third photograph, not choosing between the two you were shown. Explicitly do NOT carry over the input selfie's expression or mood as-is — even if the person looked flat, tired, serious, or camera-shy in their own casual photo, direct a genuinely confident, warm, camera-ready expression for this shot instead. Equally, do NOT carry over the product photo's pose, model's stance, chair, furniture, or background — that photo exists only to show you the garment's design, not to dictate the shot. Nothing should be a generic, reusable default: reason freshly about this exact person and this exact garment together, and commit to specific, concrete choices rather than safe generic ones. The ONLY thing that must stay the same as the input photo is who this person is — their underlying facial structure, features, and build — not their literal expression, mood, or however flattering (or not) that one casual photo happened to be, and not the pose or setting of either reference image. Never comment on attractiveness or body shape judgmentally — this is purely practical photography direction. Output must be valid JSON matching the given schema exactly.",
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `Dress/outfit to try on this person: "${dress.title}" (from ${dress.siteName}). Person's stated occasion: ${profile.occasion || "everyday"}, build: ${profile.bodyBuild || "not specified"}, fit preference: ${profile.fit || "not specified"}, pronouns: ${profile.pronouns || "not specified"} (context only, not a template lookup). Study their actual face/build/hair in the first photo and this exact garment in the second photo, then direct this shoot as a genuinely new photograph — a different pose, expression, and hairstyle from whatever the input photo happens to show, whatever combination actually suits this garment and occasion best on this real person.`,
-            },
-            { type: "image_url", image_url: { url: photoUrl } },
-            { type: "image_url", image_url: { url: dress.imageUrl } },
-          ],
-        },
-      ],
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "try_on_addendum",
-          strict: true,
-          schema: TRY_ON_ADDENDUM_JSON_SCHEMA,
-        },
-      },
-      // No `temperature` override — see analyze-photo.ts's comment on the
-      // same param; gpt-5.5 only supports the default value.
-      // max_completion_tokens, not max_tokens — see analyze-photo.ts's
-      // comment on the same param; gpt-5.5 rejects the older name.
-      //
-      // Raised from 400 to 1200: this was a real, confirmed root cause of
-      // a silent failure — gpt-5.5 is a reasoning-model-family model (see
-      // the temperature-rejection note above, a related symptom of the
-      // same family), and reasoning tokens are believed to count against
-      // this same budget alongside the visible completion. With a 6-field
-      // strict JSON schema to fill (this route's largest schema of the
-      // three that make this same call), 400 tokens was apparently
-      // consumed entirely by internal reasoning before any visible content
-      // could be emitted, producing a genuinely empty completion — which
-      // (before the fix at the `if (!raw)` check above) failed completely
-      // silently, with no log at all, making this very hard to diagnose.
-      // If addendum generation is ever reported as unreliable again after
-      // this, check for the new "Try-on addendum agent returned empty
-      // content" warning log first, and consider raising this further
-      // before assuming the prompt itself is at fault.
-      max_completion_tokens: 1200,
-    });
-    const raw = completion.choices[0]?.message?.content?.trim();
-    if (!raw) {
-      // This was a real, previously-silent failure path: if the model
-      // returns no content (e.g. hit a refusal, or the strict schema
-      // response was empty for any reason), this used to just return null
-      // with NO log at all — neither logger.info's success path nor
-      // logger.warn's catch-block path ever ran, making it look from the
-      // logs like this function was never even called. Confirmed live:
-      // production requests completed successfully (200 OK) with zero
-      // "Try-on addendum generated" entries anywhere in the logs, across
-      // multiple real try-on requests after this route's model was
-      // already switched to gpt-5.5 — this silent-empty-content path is
-      // the explanation. Log it now so this is never invisible again.
-      logger.warn(
-        { dressId: dress.id, finishReason: completion.choices[0]?.finish_reason },
-        "Try-on addendum agent returned empty content; continuing without it",
-      );
-      return null;
-    }
-    const addendum = JSON.parse(raw) as TryOnAddendum;
-    // Logged at `info` (not `debug`) deliberately: this is the ONLY place
-    // the actual styling decision for a try-on is visible, and depending
-    // on `debug`-level logging being correctly configured on a given
-    // deployment (a real point of friction — Render's own log viewer has
-    // its own separate level filter on top of LOG_LEVEL, so even a
-    // correctly-set LOG_LEVEL=debug can still show nothing if the viewer's
-    // filter isn't also widened) has repeatedly gotten in the way of
-    // diagnosing real styling-quality issues on this route. Do not lower
-    // this back to `debug` without a more reliable way to inspect it.
-    logger.info({ dressId: dress.id, tryOnAddendum: addendum }, "Try-on addendum generated");
-    return addendum;
-  } catch (err) {
-    logger.warn({ err, dressId: dress.id }, "Try-on addendum agent failed; continuing without it");
-    return null;
-  }
-}
-
-function buildTryOnPrompt(dress: DressResult, profile: SkinTuneProfile, addendum: TryOnAddendum | null): string {
-  const parts = [
-    `This is a photo of a real specific person, shown alongside a real product photo of a dress/outfit ("${dress.title}"). The single most important rule: the output must show the SAME PERSON as the first reference photo — the same underlying face, features, and body build, genuinely recognizable as this individual. This is a hard, non-negotiable constraint that overrides every other instruction in this prompt if they ever conflict. But matching identity means matching WHO they are, not literally copying pixels from their photo: this must be a brand new, freshly-composed photograph — a different expression, a different pose, different lighting, a different setting — never a crop or copy-paste of the input photo's face pasted onto a new body or background. Think of this the way a skilled portrait photographer would: they'd recognize the person on sight, but every photograph they take of that person looks like a real, distinct moment, not a repeated copy of one snapshot. Everything else — hairstyle, expression, pose, body language, background — is yours to change as much as needed for the best result. Preserving identity is not the same as preserving the original photo; you are re-styling this person for a new shoot, not lightly editing their existing photo.`,
-    // Explicit, itemized face-feature preservation — full-length framing
-    // (required here, see below, so the whole garment stays visible) is a
-    // BIGGER transformation from a typical selfie than a waist-up crop
-    // would be, which empirically makes the model more likely to
-    // "reinterpret" the face. Since framing can't be pulled in to
-    // compensate (the product needs the full outfit visible), the
-    // mitigation instead is to be maximally explicit about which exact
-    // facial features must transfer, rather than relying on a vaguer
-    // "keep the same face" instruction alone.
-    //
-    // IMPORTANT: this list names structural features to preserve (shape,
-    // proportions, markings) specifically so the model has concrete things
-    // to hold onto WITHOUT resorting to literally copy-pasting the face
-    // region — a real, reported failure mode where an overly literal
-    // "keep the exact face" instruction caused the model to paste the
-    // input photo's face (expression and all) directly onto the new body,
-    // producing a visible seam and a frozen, mismatched expression that
-    // never fit the new pose/scene. The fix is this explicit framing:
-    // match the structural identity, but render it fresh, feeling free to
-    // vary micro-expression, eye direction, and skin lighting naturally.
-    "Study the person's underlying facial structure in the first reference photo — face shape and jawline, eyebrow shape and thickness, eye shape and spacing, nose shape, mouth/lip shape, any facial hair (style, density, and pattern), skin tone, and hairline — and reproduce THAT structure faithfully in the new photo, rendered naturally under the new photo's own lighting and expression. This is about matching their real bone structure and features, not about literally transplanting the face pixels from the input photo — the output should look like a new photograph of this same person, with their face lit and rendered as part of the new scene, not a cutout. Do not generate a generic or idealized face that merely resembles this person. Do not slim, narrow, or otherwise idealize the face shape — reproduce it as it actually is, fuller or rounder faces included — but do let them look genuinely well-lit, well-groomed, and at their best, the way a good photographer would present anyone: flattering light and a confident, polished expression, never a copy of however they happened to look in a casual, off-guard selfie.",
-    // Body build preservation was a real, live-reported gap: profile.
-    // bodyBuild was only ever passed to writeTryOnAddendum() as loose
-    // context, never turned into an explicit instruction in the actual
-    // image-edit prompt (unlike generate-image.ts's buildLookEditPrompt,
-    // which has always had this line). Result: real try-on outputs came
-    // back visibly slimmer/more athletic than the person's actual photo,
-    // alongside the face-shape drift — the model was filling in a "generic
-    // fit model" build by default with nothing telling it not to.
-    profile.bodyBuild
-      ? `Preserve their exact natural body build as seen in the first reference photo (${profile.bodyBuild}) — do not slim them down, do not make them more athletic or toned than they actually appear, do not alter their body shape, proportions, height, or weight in any way. The garment should be shown fitting THIS person's real build, not a slimmer or more idealized version of them.`
-      : "Preserve their exact natural body build, proportions, and weight as seen in the first reference photo — do not slim them down or otherwise alter their body shape.",
-    // Anti "cut-paste face" instruction, ported from generate-image.ts —
-    // the failure mode this guards against is visibly distinct from
-    // ordinary identity drift: the face reads as pasted onto a different
-    // pose/lighting/body rather than photographed as one coherent scene.
-    "The face must be seamlessly and naturally part of the new photo — matching the new lighting, angle, and skin tone rendering of the rest of the scene. It must never look like a face cut out and pasted onto a different body or pose; the neck, jaw, hairline, and shoulders must blend continuously into the body below with consistent lighting and perspective, as if this is one single photograph taken in one moment, not a composite of the original photo with a new outfit glued on.",
-    // Full-length framing is required (not waist-up) because the product
-    // needs the complete garment visible, including bottoms/footwear —
-    // cropping to waist-up would hide most of the outfit and defeat the
-    // point of a try-on. This is a deliberate trade-off: full-length is a
-    // bigger transformation from a typical selfie and empirically carries
-    // more identity-drift risk than a tighter crop would, which is why the
-    // face-feature instructions above are unusually explicit to compensate.
-    "Frame this as a full-length shot showing the complete outfit from head to shoes — the whole garment, including any bottoms and footwear, must be visible in the frame. Do not crop to a waist-up or close-up portrait; the point of this photo is to show the full look.",
-    // Real, live-reported issue: the person's own reference photo is
-    // typically a close-up selfie, and when that gets converted to a
-    // full-length shot, the model can carry over the close-up's head
-    // size relative to the frame — resulting in a head/face that looks
-    // too large for the body once the rest of the person is visible. The
-    // face's actual FEATURES must transfer (see the itemized list above),
-    // but its SIZE in this new composition must scale down naturally to
-    // match a real full-length photograph, not stay selfie-sized.
-    "The head and face must be sized correctly and naturally for a full-length photograph — proportional to the rest of the body the way a real full-body photo actually looks, not enlarged or close-up-sized the way it would appear cropped tightly in a selfie. Get the head-to-body size ratio right for someone standing at a normal distance from the camera.",
-    "Dress this exact person in the exact garment shown in the second reference image — match its actual cut, colour, pattern, and details faithfully, not a generic approximation.",
-    // A real, live-reported failure mode this addresses directly: a
-    // generated try-on came back with the person's own face but the exact
-    // same pose, sitting position, chair, and background as the SECOND
-    // reference image (the dress's own product photo) — the model had
-    // been told not to copy the FIRST reference's (the selfie's) pose,
-    // but nothing ever said not to copy the SECOND reference's pose
-    // either, so it took the path of least resistance and copied that one
-    // instead. Only the garment's design (cut, colour, pattern, fabric)
-    // should come from the second reference image — its pose, model,
-    // setting, chair, and background must NOT be copied into the output.
-    "Only the GARMENT ITSELF — its cut, colour, pattern, and fabric — should be taken from the second reference image. Do NOT copy that image's pose, the way its own model is sitting or standing, its background, its furniture, or its setting. The pose, setting, and background for this photo are decided fresh below, independent of both reference images.",
-    "The garment must fit this exact person's actual body correctly: drape, sit, and follow their REAL proportions and build (not a slimmer or idealized version) as if properly worn, not pasted on or floating away from the body.",
-    // Each addendum field used to be folded into one long clause (all five
-    // of expression/angle/body-language/setting/fit crammed into a single
-    // sentence), with only hairstyle singled out as its own forceful,
-    // individually-stated MUST instruction. Confirmed live via the (now
-    // fixed) addendum log: the agent itself was already deciding good,
-    // specific values for every field — e.g. a real logged
-    // hairstyleRendering of "neater voluminous side-swept quiff... top
-    // kept full but shaped" — but the final image-generation model still
-    // under-delivered on hair specifically, the one field buried in a
-    // shared sentence with four others rather than stated as its own
-    // requirement. Every field below is now its own separate, explicit
-    // MUST-style instruction, matching the treatment hairstyle already had
-    // — a shared sentence structure was very likely diluting how strongly
-    // the model weighted each individual instruction, not just hairstyle's.
-    addendum
-      ? `Facial expression for this shot — this is a specific, deliberate creative decision, not optional flavour text: ${addendum.expression} The output's expression MUST match this description, not the input photo's expression.`
-      : "",
-    addendum
-      ? `Head position and camera angle for this shot: ${addendum.headAndCameraAngle} The output MUST be composed at this angle, not a plain reproduction of the input photo's angle.`
-      : "",
-    addendum
-      ? `Body language and pose for this shot: ${addendum.bodyLanguage} The output MUST show this exact body language and pose.`
-      : "",
-    addendum
-      ? `Background and setting for this shot: ${addendum.environmentAndSetting} The output MUST be set in this environment, not a generic or different backdrop.`
-      : "",
-    addendum
-      ? `New hairstyle rendering for this shot: ${addendum.hairstyleRendering} This hair MUST be visibly restyled to match that description if it calls for a change from the input photo — do not simply leave the hair exactly as it appears in the original photo. Changing hairstyle does NOT change who this person is, so restyle it with confidence.`
-      : "",
-    addendum
-      ? `Fit notes for how the garment sits on this person: ${addendum.fitNotes}`
-      : "Compose this as one natural, well-lit, coherent photograph with a pose, expression, and setting genuinely different from the input photo's own — a new shoot, not a copy of the original.",
-    addendum
-      ? `What will make this specific person look genuinely great in this specific garment: ${addendum.flatteringDirection} This reasoning MUST shape the final shot, not just be background context.`
-      : "",
-    "Natural lighting, tasteful and supportive, no beauty filter, no visible text or watermark. Professional editorial photo quality, the kind of natural, well-composed photo you'd see in a stylish social-media outfit post — not a stiff studio ID photo, and not a barely-modified copy of the input selfie.",
-    "Final reminder, the most important rules in this entire prompt: (1) the output face AND body build must be unmistakably the SAME PERSON as the first reference photo — same face shape, same features, same facial hair, same skin tone, same body build and proportions (not slimmer, not more toned, not idealized); (2) EVERY styling instruction given above — expression, head/camera angle, body language, background/setting, and especially hairstyle — must be followed as stated, not softened, not defaulted back toward EITHER reference photo, and not treated as optional; (3) the second reference image's pose, model, chair/furniture, and background must NOT appear in the output — only that garment's own design should transfer. Look at the first reference photo again before finishing and check the output genuinely matches it on identity, check it does NOT match the second reference photo's pose/setting, and check the styling instructions above were genuinely followed, not just approximated. Seamlessly integrated into the new scene (not pasted-looking), full-length framing with the complete outfit visible. This is a full re-styling for a new photograph, not a light touch-up or recreation of either reference image.",
-  ];
-  return parts.filter(Boolean).join(" ");
-}
-
-/** Splits a "data:image/jpeg;base64,...." data URL into its mime type and raw bytes. */
-function decodeDataUrl(dataUrl: string): { mime: string; buffer: Buffer } {
-  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
-  if (!match) throw new Error("Not a valid base64 data URL");
-  const [, mime, base64] = match;
-  return { mime, buffer: Buffer.from(base64, "base64") };
-}
-
-/**
- * Primary path: Responses API's image_generation tool, given the user's own
- * photo AND the dress's real product photo as two reference images — same
- * mechanism and org-verification caveat as generate-image.ts.
- */
-async function tryOnViaResponsesApi(
-  openai: ReturnType<typeof getOpenAIClient>,
-  prompt: string,
-  photoUrl: string,
-  dressImageUrl: string,
-): Promise<string> {
-  const response = await openai.responses.create({
-    model: RECOMMENDATION_MODEL,
-    input: [
-      {
-        role: "user",
-        content: [
-          { type: "input_text", text: prompt },
-          { type: "input_image", image_url: photoUrl, detail: "original" },
-          { type: "input_image", image_url: dressImageUrl, detail: "original" },
-        ],
-      },
-    ],
-    tools: [
-      {
-        type: "image_generation",
-        model: IMAGE_MODEL,
-        quality: "high",
-        moderation: "low",
-        size: "1024x1536",
-        output_format: "jpeg",
-        output_compression: 90,
-      },
-    ],
-  });
-
-  const imageCall = response.output.find(
-    (item): item is Extract<typeof item, { type: "image_generation_call" }> =>
-      item.type === "image_generation_call",
-  );
-  if (!imageCall?.result) {
-    throw new Error(
-      `Responses API try-on returned no result (status: ${imageCall?.status ?? "no call found"})`,
-    );
-  }
-  return `data:image/jpeg;base64,${imageCall.result}`;
-}
-
-/**
- * Fallback path: classic images.edit with both images passed as an array
- * (the user's photo first, the dress photo second) — doesn't require org
- * verification, weaker identity preservation, same caveat as
- * generate-image.ts's editViaImagesEdit. The dress photo may be a remote
- * https URL (from Tavily) rather than a data URL, so it's fetched first.
- */
-async function tryOnViaImagesEdit(
-  openai: ReturnType<typeof getOpenAIClient>,
-  prompt: string,
-  photoUrl: string,
-  dressImageUrl: string,
-): Promise<string> {
-  const person = decodeDataUrl(photoUrl);
-  const personFile = await toFile(person.buffer, `photo.${person.mime.split("/")[1] ?? "jpg"}`, {
-    type: person.mime,
-  });
-
-  const dressRes = await fetch(dressImageUrl);
-  if (!dressRes.ok) throw new Error(`Failed to fetch dress image: ${dressRes.status}`);
-  const dressBuffer = Buffer.from(await dressRes.arrayBuffer());
-  const dressMime = dressRes.headers.get("content-type") || "image/jpeg";
-  const dressFile = await toFile(dressBuffer, `dress.${dressMime.split("/")[1] ?? "jpg"}`, { type: dressMime });
-
-  const result = await openai.images.edit({
-    model: IMAGE_MODEL,
-    image: [personFile, dressFile],
-    prompt,
-    size: "1024x1536",
-    quality: "high",
-    output_format: "jpeg",
-    output_compression: 90,
-    n: 1,
-  });
-  const image = result.data?.[0];
-  const imageUrl = image?.b64_json ? `data:image/jpeg;base64,${image.b64_json}` : image?.url;
-  if (!imageUrl) throw new Error("images.edit try-on returned no image");
-  return imageUrl;
-}
-
 router.post("/try-on", async (req, res) => {
   const parsed = TryOnRequestSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -365,20 +30,19 @@ router.post("/try-on", async (req, res) => {
   const { dress, profile, photoUrl } = parsed.data;
 
   try {
-    const openai = getOpenAIClient();
-    const addendum = await writeTryOnAddendum(openai, dress, profile, photoUrl);
-    const prompt = buildTryOnPrompt(dress, profile, addendum);
-
-    let imageUrl: string;
-    try {
-      imageUrl = await tryOnViaResponsesApi(openai, prompt, photoUrl, dress.imageUrl);
-    } catch (responsesApiErr) {
-      logger.warn(
-        { err: responsesApiErr, dressId: dress.id },
-        "Responses API try-on failed, falling back to images.edit",
-      );
-      imageUrl = await tryOnViaImagesEdit(openai, prompt, photoUrl, dress.imageUrl);
-    }
+    const provider = getVtoProvider();
+    const imageUrl = await provider.generateTryOn({
+      avatarImageUrl: photoUrl,
+      garmentImageUrl: dress.imageUrl,
+      context: {
+        occasion: profile.occasion,
+        bodyBuild: profile.bodyBuild,
+        fit: profile.fit,
+        pronouns: profile.pronouns,
+        garmentTitle: dress.title,
+        garmentSiteName: dress.siteName,
+      },
+    });
 
     const data = TryOnResponseSchema.parse({ imageUrl });
     res.json(data);
