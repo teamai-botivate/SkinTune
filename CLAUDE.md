@@ -2342,3 +2342,62 @@ against a live FASHN key, and if either the status-poll path or either
 endpoint's response-shape assumption above turns out wrong, that's the
 first place to check — not the surrounding route code, which is unchanged
 from the already-working OpenAI path structurally.
+
+### Confirmed live on the first real deploy: `OpenAiWebSearchProvider`'s `max_output_tokens: 4000` was too low — exact same reasoning-token-budget bug, fourth occurrence
+
+First real production deploy of this branch (avatar creation worked —
+`gpt-image-2.5-flare` confirmed to be a real, working `IMAGE_MODEL` value
+this way, 200 OK in ~26s) but `/api/search-dresses` returned a 502 with
+the new, more specific error message added earlier in this file
+("every per-site task completed but returned zero usable results after
+filtering — this points at the search query/filters themselves, not a
+provider-side error"). Render logs showed the actual cause immediately:
+
+```
+SyntaxError: Unterminated string in JSON at position 2866 (line 1 column 2867)
+  at OpenAiWebSearchProvider.search (.../openai-web-search-provider.ts:122:21)
+```
+
+This is the exact same root-cause PATTERN already documented three times
+elsewhere in this file (`writeTryOnAddendum`, `writeStylingAddendum`,
+`filterByImageContent`) — `gpt-5.5` is a reasoning-model-family model
+whose internal reasoning tokens count against the same
+`max_output_tokens`/`max_completion_tokens` budget as the visible output.
+This call is genuinely the heaviest of the four: it has to actually
+invoke the `web_search` tool (real HTTP round-trips to real pages, each
+consuming tokens) potentially several times before it can even start
+emitting the final JSON product list, and `max_output_tokens` had been
+set to only 4000 — clearly insufficient, confirmed by the literal
+mid-string cutoff in the error.
+
+Fix: raised `max_output_tokens` 4000 -> 10000. Also added
+`finish_reason`-equivalent diagnostics that didn't exist before (this
+call site uses the Responses API, not Chat Completions, so the field is
+`response.incomplete_details?.reason`/`response.status`, not
+`finish_reason` — logged on both the empty-output path and the
+JSON-parse-failure path, plus the raw output's length and last 200 chars
+on the parse-failure path specifically, so a truncation is visible
+directly in the log without needing to reproduce the request).
+
+**This is now the fourth confirmed occurrence of this exact failure
+pattern in this codebase.** The standing lesson already stated
+elsewhere in this file — "any new call site that uses `gpt-5.5` with
+structured JSON output and asks it to reason over a non-trivial amount of
+input should start with a generous `max_output_tokens`/
+`max_completion_tokens` (1000+, and clearly more for anything invoking a
+tool like `web_search`), not the smallest number that seems sufficient
+for the visible output alone" — should have applied to this call site
+from the start; 4000 was already an attempt at "generous" and still
+wasn't enough for a tool-using call. If truncation is ever reported again
+after raising to 10000, check the newly-added `rawTail`/`incompleteReason`
+log fields first to confirm it's still token-budget-related before
+raising further or suspecting something else.
+
+Not independently re-verified against a live request after this specific
+fix (the fix follows directly from the confirmed live error, but the
+corrected value itself was not re-tested in this session) — typecheck and
+build both pass. If search still 502s after this ships with the SAME
+"Unterminated string" error, raise `max_output_tokens` further (there's no
+known hard ceiling reason not to go to 16000+ for this specific call,
+given how token-hungry a multi-page web search naturally is) rather than
+assuming a different fix is needed.

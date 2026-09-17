@@ -102,18 +102,33 @@ export class OpenAiWebSearchProvider implements SearchProvider {
           schema: RESULT_JSON_SCHEMA,
         },
       },
-      // See analyze-photo.ts/try-on.ts for the confirmed root cause this
-      // budget size guards against: this codebase's default model is a
-      // reasoning-model family whose internal reasoning (here: actually
-      // running the web_search tool multiple times, reading pages) counts
-      // against the same output-token budget as the final JSON. A search
-      // call that may browse several pages needs generous headroom.
-      max_output_tokens: 4000,
+      // Raised from 4000 to 10000 — confirmed live (Render logs, first
+      // production deploy of this provider) that 4000 was too low:
+      // real requests came back with `SyntaxError: Unterminated string in
+      // JSON`, meaning the model's visible JSON output was cut off
+      // mid-string by hitting this token ceiling. This is the SAME root
+      // cause pattern documented repeatedly elsewhere in this codebase
+      // (analyze-photo.ts, try-on.ts, search-dresses.ts's
+      // filterByImageContent) — gpt-5.5 is a reasoning-model-family model
+      // whose internal reasoning tokens count against this same budget,
+      // and this call is a genuinely heavier one than any of those: it
+      // has to actually RUN the web_search tool (real HTTP calls to real
+      // pages, each one consuming reasoning/tool-call tokens) potentially
+      // several times before it can even start writing the final JSON
+      // list of products. 10000 is a generous first correction, not a
+      // proven-sufficient value — if truncated-JSON warnings still appear
+      // after this ships, raise it further (the log now includes
+      // finish_reason specifically to confirm this is still the cause
+      // before assuming something else broke).
+      max_output_tokens: 10000,
     });
 
     const raw = response.output_text?.trim();
     if (!raw) {
-      logger.warn({ query }, "OpenAI web search returned no structured output; treating as zero results");
+      logger.warn(
+        { query, incompleteReason: response.incomplete_details?.reason, status: response.status },
+        "OpenAI web search returned no structured output; treating as zero results",
+      );
       return { images: [], pages: [] };
     }
 
@@ -121,7 +136,21 @@ export class OpenAiWebSearchProvider implements SearchProvider {
     try {
       parsed = JSON.parse(raw);
     } catch (err) {
-      logger.warn({ err, query }, "OpenAI web search returned unparseable JSON; treating as zero results");
+      // Logging the raw output's length and last 200 chars (not the whole
+      // thing — could be large) specifically so a truncation can be
+      // visually confirmed from the log (a string cut off mid-value, no
+      // closing braces) without needing to reproduce the request.
+      logger.warn(
+        {
+          err,
+          query,
+          rawLength: raw.length,
+          rawTail: raw.slice(-200),
+          incompleteReason: response.incomplete_details?.reason,
+          status: response.status,
+        },
+        "OpenAI web search returned unparseable JSON; treating as zero results",
+      );
       return { images: [], pages: [] };
     }
 
