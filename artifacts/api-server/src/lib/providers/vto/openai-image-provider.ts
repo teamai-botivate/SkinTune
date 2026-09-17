@@ -52,7 +52,7 @@ export class OpenAiImageProvider implements VtoProvider {
           moderation: "low",
           size: "1024x1536",
           output_format: "jpeg",
-          output_compression: 90,
+          output_compression: 98,
         },
       ],
     });
@@ -76,7 +76,7 @@ export class OpenAiImageProvider implements VtoProvider {
       size: "1024x1536",
       quality: "high",
       output_format: "jpeg",
-      output_compression: 90,
+      output_compression: 98,
       n: 1,
     });
     const image = result.data?.[0];
@@ -111,7 +111,7 @@ export class OpenAiImageProvider implements VtoProvider {
             moderation: "low",
             size: "1024x1536",
             output_format: "jpeg",
-            output_compression: 90,
+            output_compression: 98,
           },
         ],
       });
@@ -139,7 +139,7 @@ export class OpenAiImageProvider implements VtoProvider {
         size: "1024x1536",
         quality: "high",
         output_format: "jpeg",
-        output_compression: 90,
+        output_compression: 98,
         n: 1,
       });
       const image = result.data?.[0];

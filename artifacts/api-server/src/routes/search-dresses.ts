@@ -532,7 +532,24 @@ async function runDressSearch(
   // style across the user's own lists — see buildQueryPlan's doc comment
   // for why this replaced a single unscoped query (it was the root cause
   // of both "only one site" and "only one colour" being reported live).
-  const tasks = buildQueryPlan(profile, page, SHOPPING_SITES.length);
+  //
+  // Task COUNT is provider-dependent — confirmed live (Render logs, first
+  // production deploys after the OpenAI web-search provider became the
+  // default): a full search taking 3-5+ MINUTES, because each of the 6
+  // parallel tasks was its own OpenAI Responses API call that has to
+  // actually RUN the web_search tool (real multi-page browsing) before
+  // returning — a fundamentally heavier operation per call than Tavily's
+  // single direct-search-API request. Running 6 of these in parallel
+  // doesn't cost 6x latency in theory, but in practice measured far worse
+  // than Tavily's equivalent 6-way fan-out ever did on this same route.
+  // Cutting task count for the OpenAI provider specifically (not touching
+  // Tavily's, which was already fast at 6) trades a little site/colour
+  // variety for a search that actually completes in a reasonable time —
+  // if this is ever reported as still too slow, cut this further before
+  // assuming something else is wrong; the model call itself is the cost,
+  // not this route's own logic.
+  const taskCount = provider.name === "openai-web-search" ? 3 : SHOPPING_SITES.length;
+  const tasks = buildQueryPlan(profile, page, taskCount);
   const perTaskLimit = Math.max(2, Math.ceil((limit * 2) / tasks.length));
 
   const taskResults = await Promise.allSettled(

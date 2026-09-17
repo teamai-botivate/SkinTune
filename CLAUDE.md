@@ -2401,3 +2401,71 @@ build both pass. If search still 502s after this ships with the SAME
 known hard ceiling reason not to go to 16000+ for this specific call,
 given how token-hungry a multi-page web search naturally is) rather than
 assuming a different fix is needed.
+
+### Confirmed live after the token-budget fix: search worked, but the OpenAI web-search provider is dramatically slower than Tavily was
+
+Reported live via Render logs: `/api/search-dresses` requests completing
+with `responseTime: 325573` (~5.4 minutes) and `responseTime: 175222`
+(~2.9 minutes). This is a genuine, measured regression versus this
+branch's parent (`real-dress-search`, which used Tavily) — Tavily's
+`/search` endpoint is one direct HTTP call per site; the new default
+`OpenAiWebSearchProvider` is a full Responses API turn that has to
+actually invoke the `web_search` tool (real multi-page browsing) before
+it can emit anything, and `runDressSearch` was still fanning out across
+all 6 `SHOPPING_SITES` in parallel — 6 of these genuinely heavy calls at
+once, not 6 of Tavily's cheap ones.
+
+Fix: `runDressSearch` now picks the task count based on which provider is
+active — `SHOPPING_SITES.length` (6) unchanged for Tavily (still fast at
+that fan-out), but only 3 for `OpenAiWebSearchProvider`
+(`provider.name === "openai-web-search"`). This trades some site/colour
+variety for a search that actually completes in a reasonable time. Not
+independently re-measured against a live request in this session (the
+fix follows directly from the confirmed live timing, but 3 wasn't itself
+re-timed) — if search is still reported as too slow after this ships,
+cut the task count further (e.g. to 2) before assuming a different fix is
+needed; the web_search tool call's own latency is the actual cost here,
+not anything else in this route's logic. If genuine multi-second latency
+becomes an unacceptable tradeoff even at a low task count, the real fix
+would be switching back to `SEARCH_PROVIDER=tavily` for latency-sensitive
+deployments, not continuing to shrink `OpenAiWebSearchProvider`'s
+fan-out indefinitely — see this file's `.env.example` notes for how to
+do that switch.
+
+### Image quality/sharpness improved per direct request ("HD and enhance image")
+
+Two changes, both to `lib/providers/vto/openai-image-provider.ts` and the
+two prompt files it uses (`lib/prompts/avatar-prompt.ts`,
+`lib/prompts/try-on-prompt.ts`) — `size: "1024x1536"` and `quality: "high"`
+were already the API parameters used everywhere in this file (both were
+already at their most-detailed documented option for `gpt-image-2`-family
+models; `size` was deliberately NOT changed further without confirming a
+larger size is actually supported, since guessing a size string risks a
+hard 400 rather than a quality improvement):
+
+1. `output_compression` raised from `90` to `98` across all four call
+   sites in `openai-image-provider.ts` (both the Responses API and
+   `images.edit` paths, for both avatar creation and try-on) — this is
+   the JPEG compression quality parameter; 98 is close to visually
+   lossless, trading a larger base64 payload for less compression
+   artifacting.
+2. Both prompt files gained an explicit sharpness/detail instruction
+   ("The image must be sharp, high-resolution, and richly detailed —
+   crisp fabric texture... no softness, no blur, no visible compression
+   artifacts or blockiness... a genuine high-definition photograph...")
+   — per direct product feedback that the model's own text instructions
+   about crispness measurably affect output sharpness, not just the
+   API's `quality` parameter alone. This is additive to the existing
+   prompt text (nothing about identity/pose/hairstyle instructions was
+   touched), placed right after each prompt's existing "professional
+   photo quality" line.
+
+Not independently live-verified with a side-by-side before/after
+comparison in this session (no API key available) — typecheck and build
+both pass. If output is still reported as insufficiently sharp/detailed
+after this ships, check whether `output_format: "jpeg"` should switch to
+`"png"` (fully lossless, at the cost of a larger payload and possibly
+slower generation) before assuming the prompt wording needs further
+strengthening — that tradeoff was raised directly with the user and
+deferred pending a preference, so it's the next lever to pull, not a new
+one to invent.

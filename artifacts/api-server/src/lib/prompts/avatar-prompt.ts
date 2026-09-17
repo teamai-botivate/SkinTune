@@ -38,6 +38,13 @@ export function buildAvatarPrompt(profile: { bodyBuild?: string }): string {
     "A neutral, softly-lit plain background (a simple studio-style backdrop or softly blurred neutral setting) so this photo works as a reusable reference for many different future outfits, not tied to one specific occasion or environment.",
     "A natural, warm, confident expression and relaxed, open body language — genuinely photographed under good even lighting, not a copy of however this person happened to look in a casual, off-guard selfie, but also not an exaggerated pose.",
     "Natural lighting, no beauty filter, no visible text or watermark. Professional, clean photo quality — the kind of well-lit, natural full-length photo a good photographer would take, not a stiff studio ID photo.",
+    // Explicit sharpness/resolution instruction — the API's own `quality:
+    // "high"` parameter controls the model's overall generation effort,
+    // but per direct product feedback the model's own TEXT instructions
+    // about crispness/detail also measurably affect output sharpness, so
+    // this is stated explicitly rather than left implicit in "clean photo
+    // quality" alone.
+    "The image must be sharp, high-resolution, and richly detailed — crisp fabric texture, natural skin texture and fine hair strands clearly resolved, no softness, no blur, no visible compression artifacts or blockiness. This should look like a genuine high-definition photograph straight out of a good camera, not a low-resolution or over-smoothed render.",
     "Final reminder, the most important rule in this entire prompt: the output face AND body build must be unmistakably the SAME PERSON as the reference photo — same face shape, same features, same facial hair, same skin tone, same body build and proportions (not slimmer, not more toned, not idealized). Look at the reference photo again before finishing and check the output genuinely matches it on identity. This is a full-length, well-lit reference photo of this real person, not a generic fashion model.",
   ];
   return parts.filter(Boolean).join(" ");
