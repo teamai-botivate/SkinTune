@@ -2469,3 +2469,56 @@ slower generation) before assuming the prompt wording needs further
 strengthening — that tradeoff was raised directly with the user and
 deferred pending a preference, so it's the next lever to pull, not a new
 one to invent.
+
+### Default search provider flipped back to Tavily — cost, not just speed
+
+Follow-up to the two notes above (the token-budget fix and the slowness
+fix on `OpenAiWebSearchProvider`) — once real per-search cost was worked
+out (each search action = 3-6 parallel Responses API calls that each
+have to run the `web_search` tool, i.e. real tool-call fees PLUS model
+token costs, not a flat cheap search API call), the user's explicit
+direction was to stop using AI-based web search as the default entirely:
+**"AI web search nhi chahaiye ye bahut Rs lag raha h, tavily hi use karo
+ab"** (don't want AI web search, it costs too much, use Tavily now).
+
+Fix: `lib/providers/search/index.ts`'s `getSearchProvider()` default
+flipped from `"openai"` back to `"tavily"` — `SEARCH_PROVIDER` unset (or
+explicitly `"tavily"`) now uses `LegacyTavilySearchProvider`;
+`SEARCH_PROVIDER=openai` is the new explicit opt-in for
+`OpenAiWebSearchProvider`, mirroring exactly how Tavily was the opt-in
+during the previous default. Neither provider implementation was deleted
+or changed — this is purely a default-selection flip, the same kind of
+change as the earlier `gpt-4o`→`gpt-5.5` default flip elsewhere in this
+file. `runDressSearch`'s existing `taskCount` logic (3 tasks for the
+OpenAI provider, `SHOPPING_SITES.length` = 6 for Tavily — see the
+slowness-fix note above) needed no change: it already keys off
+`provider.name`, so switching the default provider automatically
+restores Tavily's full 6-site fan-out without any code change to that
+logic.
+
+**Also, per the same request to make the (now-default) Tavily search
+itself better-targeted**, `buildSearchQuery` gained two more
+profile-driven clauses that were being collected from the user but never
+actually used to shape the search query before this: `profile.fit`
+(e.g. "fitted", "relaxed" — appended plainly, right after the gender
+clause) and `profile.bodyBuild` (e.g. "athletic", "slim" — appended as
+`"for ${bodyBuild} build"`, right after the occasion clause). Both are
+genuinely conditional on what the user actually answered, matching every
+other clause in this function — an unanswered field produces no clause,
+never a default value. This does NOT reintroduce the negative-keyword
+exclusion approach that broke production once already (see the earlier
+note on that regression) — these are purely additive positive-signal
+clauses, the same class of change as the existing colour/style/occasion
+clauses that have always been part of this query.
+
+Not independently live-tested against the real Tavily API with these two
+new clauses in this session (no `TAVILY_API_KEY` available) — typecheck
+and build both pass. If results are ever reported as too narrow/too few
+after this ships, check whether `fit`+`bodyBuild` together with the
+existing colour/style/occasion clauses have made the query too long and
+over-specific for Tavily's keyword matching (a similar failure mode to
+the earlier exclusion-string regression, though additive clauses are a
+much smaller and different kind of risk than an exclusion-term stack
+was) before assuming a different fix is needed — dropping `bodyBuild`
+from the query first would be the quickest thing to try, since `fit` is
+the more directly clothing-relevant of the two.

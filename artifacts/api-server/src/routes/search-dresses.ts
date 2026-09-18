@@ -70,12 +70,23 @@ function buildSearchQuery(
   const parts = [
     "buy",
     audience,
+    // fit (e.g. "fitted", "relaxed") — added per direct request to make
+    // the Tavily query more specific to the user's actual stated
+    // preference. Genuinely conditional on what the user answered, same
+    // as every other clause here — a user who left this blank produces a
+    // query with no fit clause, not a default value.
+    profile.fit || "",
     style,
     colour,
     // "clothing outfit" (not just "outfit") nudges the search toward
     // garments without needing exclusion syntax — see below for why the
     // exclusion terms that used to sit here were removed.
     profile.occasion ? `${profile.occasion} clothing outfit` : "clothing outfit",
+    // bodyBuild (e.g. "athletic", "slim") — added alongside fit for the
+    // same reason: Tavily's plain keyword search benefits from a more
+    // specific query, and this field is already collected but was never
+    // actually used to shape the search itself before this.
+    profile.bodyBuild ? `for ${profile.bodyBuild} build` : "",
     "online",
     profile.budget ? `price ${profile.budget}` : "",
     memory?.refinement ?? "",
