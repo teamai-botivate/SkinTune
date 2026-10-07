@@ -71,6 +71,72 @@ export type LookRecommendation = {
   reasoning: string[];
   confidence: number;
   imageUrl: string;
+  applicableCategories?: string[];
+};
+
+export type ProductCategory =
+  | 'outfit'
+  | 'makeup'
+  | 'jewellery'
+  | 'accessories'
+  | 'footwear';
+
+export type PriceTier = 'budget' | 'mid' | 'premium';
+
+export type ProductResult = {
+  id: string;
+  category: ProductCategory;
+  subcategory: string;
+  recommendedItemTitle?: string;
+  brand: string;
+  productName: string;
+  retailer: string;
+  price?: number;
+  formattedPrice?: string;
+  originalPrice?: number;
+  formattedOriginalPrice?: string;
+  currency?: string;
+  priceTier?: PriceTier;
+  priceVerified?: boolean;
+  productVerified?: boolean;
+  shade?: string;
+  color?: string;
+  material?: string;
+  description?: string;
+  imageUrl?: string;
+  productUrl: string;
+  urlType?: 'exact_product' | 'search_result';
+  isVerified?: boolean;
+  matchScore?: number;
+  matchReason: string;
+  availability?: string;
+  source?: string;
+  lastChecked?: string;
+};
+
+export type ProductGroup = {
+  category: ProductCategory;
+  recommendedItemTitle: string;
+  stylingRequirement: string;
+  products: ProductResult[];
+};
+
+export type ProductRecommendationsRequest = {
+  look: LookRecommendation;
+  profile: SkinTuneProfile;
+  category?: ProductCategory | 'all';
+};
+
+export type ProductRecommendationsResponse = {
+  lookId: string;
+  persona: 'woman' | 'man' | 'child' | 'neutral';
+  applicableCategories: string[];
+  products: ProductResult[];
+  groups?: ProductGroup[];
+  status: 'success' | 'partial' | 'unavailable';
+  disclaimer?: string;
+  searchedAt: string;
+  totalFound: number;
 };
 
 export type LookFeedback = {

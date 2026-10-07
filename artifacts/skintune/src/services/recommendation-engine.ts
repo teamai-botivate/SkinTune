@@ -29,6 +29,7 @@ export const mockLooks: LookRecommendation[] = [
     footwear: 'Clean leather low-top or almond loafer.',
     accessories: 'Structured canvas tote in oat.',
     confidence: 94,
+    applicableCategories: ['outfit', 'footwear', 'jewellery', 'makeup', 'accessories'],
     reasoning: [
       'Matches your warm undertone with grounded, harmonious colour.',
       'The relaxed structure supports your comfort-first fit priority.',
@@ -58,6 +59,7 @@ export const mockLooks: LookRecommendation[] = [
     footwear: 'Polished penny loafer.',
     accessories: 'Compact leather crossbody in espresso.',
     confidence: 91,
+    applicableCategories: ['outfit', 'footwear', 'jewellery', 'makeup', 'accessories'],
     reasoning: [
       'A saturated warm colour that reads confident without being loud.',
       'Tailored trouser and structured overshirt suit a style-first priority.',
@@ -87,6 +89,7 @@ export const mockLooks: LookRecommendation[] = [
     footwear: 'Almond ballet flat.',
     accessories: 'Small saddle bag with a short strap.',
     confidence: 89,
+    applicableCategories: ['outfit', 'footwear', 'jewellery', 'makeup', 'accessories'],
     reasoning: [
       'A forgiving, fluid drape supports a comfort-first fit preference.',
       'Cool sea-glass layer offsets a warm base tone for balance.',
@@ -116,6 +119,7 @@ export const mockLooks: LookRecommendation[] = [
     footwear: 'Tonal canvas low-top.',
     accessories: 'Soft navy shoulder bag.',
     confidence: 86,
+    applicableCategories: ['outfit', 'footwear', 'jewellery', 'makeup', 'accessories'],
     reasoning: [
       'A bright, creative colour pairing suits a bold or creative style preference.',
       'Curved trouser volume gives a modern, memorable silhouette.',
@@ -145,6 +149,7 @@ export const mockLooks: LookRecommendation[] = [
     footwear: 'Low-profile pointed flat or polished sneaker.',
     accessories: 'Structured shoulder bag in deep slate.',
     confidence: 88,
+    applicableCategories: ['outfit', 'footwear', 'jewellery', 'makeup', 'accessories'],
     reasoning: [
       'Soft tailoring signals capable and grounded for office or interview settings.',
       'A longer wide-leg line is flattering and comfortable across a full day.',

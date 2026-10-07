@@ -20,6 +20,16 @@
   --color-accent-foreground: hsl(var(--accent-foreground));
   --color-destructive: hsl(var(--destructive));
   --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-teal: #194343;
+  --color-mocha: #663B1B;
+  --color-linen: #D7BD9B;
+  --color-forest: #194343;
+  --color-ivory: #D7BD9B;
+  --color-emerald: #194343;
+  --color-gold: #663B1B;
+  --color-sage: #BCA68E;
   --font-sans: var(--font-body);
   --font-serif: var(--font-display);
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -30,32 +40,33 @@
 }
 
 /*
- * Deep luxury theme — near-black charcoal base with a gold/champagne
- * accent and warm ivory text. This is the app's one and only palette (no
- * light/dark toggle exists in the UI), so these ARE the default tokens
- * rather than an override. The unused `.dark` class variant from the
- * previous prototype has been folded into `:root` here — if a light-mode
- * toggle is ever added, reintroduce it as a `.light` override instead of
- * duplicating these values.
+ * SkinTune visual identity:
+ * 1. TEAL: #194343 (Main page backgrounds, dark sections, navbar, dark cards/containers, primary dark surfaces)
+ * 2. MOCHA: #663B1B (Secondary backgrounds/sections, secondary buttons, borders/dividers, warm supporting surfaces)
+ * 3. LINEN: #D7BD9B (Main text on dark backgrounds, light backgrounds/sections, highlight text, cards & inputs)
  */
 :root {
-  --background: 30 12% 7%;
-  --foreground: 40 38% 93%;
-  --border: 32 14% 20%;
-  --input: 32 14% 22%;
-  --ring: 42 62% 58%;
-  --card: 30 12% 10%;
-  --card-foreground: 40 38% 93%;
-  --primary: 42 62% 58%;
-  --primary-foreground: 30 25% 10%;
-  --secondary: 30 12% 16%;
-  --secondary-foreground: 40 30% 90%;
-  --muted: 30 12% 14%;
-  --muted-foreground: 38 14% 63%;
-  --accent: 42 55% 68%;
-  --accent-foreground: 30 25% 10%;
-  --destructive: 6 62% 52%;
-  --destructive-foreground: 40 38% 95%;
+  --background: 180 46% 18%;       /* TEAL #194343 */
+  --foreground: 35 48% 86%;        /* High-contrast crisp LINEN */
+  --border: 26 40% 32%;            /* Subtle MOCHA border */
+  --input: 180 44% 15%;            /* Deep TEAL input surface */
+  --ring: 34 45% 73%;              /* LINEN focus ring */
+  --card: 180 42% 22%;             /* Dark TEAL card surface */
+  --card-foreground: 35 48% 86%;   /* LINEN text on cards */
+  --popover: 180 42% 22%;          /* Dark TEAL popover */
+  --popover-foreground: 35 48% 86%;/* LINEN text on popover */
+  --primary: 34 45% 73%;           /* LINEN #D7BD9B */
+  --primary-foreground: 180 46% 18%;/* TEAL #194343 */
+  --secondary: 26 58% 25%;         /* MOCHA #663B1B */
+  --secondary-foreground: 35 48% 88%;/* LINEN text on mocha */
+  --muted: 180 47% 14%;            /* Deep TEAL #123333 */
+  --muted-foreground: 34 26% 65%;  /* Muted warm LINEN */
+  --accent: 26 58% 25%;            /* MOCHA #663B1B */
+  --accent-foreground: 35 48% 88%; /* LINEN */
+  --destructive: 0 65% 48%;
+  --destructive-foreground: 0 0% 100%;
+  --button-outline: hsl(26 40% 32% / 0.6);
+  --badge-outline: hsl(26 40% 32% / 0.6);
   --font-body: 'DM Sans', sans-serif;
   --font-display: 'Playfair Display', serif;
   --radius: 1rem;
