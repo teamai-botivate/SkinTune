@@ -242,13 +242,34 @@ async function writeStylingAddendum(
           schema: STYLING_ADDENDUM_JSON_SCHEMA,
         },
       },
-      temperature: 0.9,
-      max_tokens: 500,
+      // No `temperature` override — see analyze-photo.ts's comment on the
+      // same param; gpt-5.5 only supports the default value.
+      // max_completion_tokens, not max_tokens — see analyze-photo.ts's
+      // comment on the same param; gpt-5.5 rejects the older name.
+      //
+      // Raised from 500 to 1200 — this was a confirmed real bug on
+      // try-on.ts's equivalent call (writeTryOnAddendum): gpt-5.5's
+      // internal reasoning tokens appear to count against this same
+      // budget, so a low limit risked the visible completion coming back
+      // empty with NO log at all (the `if (!raw) return null` below used
+      // to fail completely silently). Applying the same fix here
+      // preventatively even though this exact route wasn't the one where
+      // the empty-response symptom was directly observed.
+      max_completion_tokens: 1200,
     });
     const raw = completion.choices[0]?.message?.content?.trim();
-    if (!raw) return null;
+    if (!raw) {
+      // Previously silent — see the identical fix and full explanation on
+      // try-on.ts's writeStylingAddendum for why this now logs instead of
+      // returning null with no trace at all.
+      logger.warn(
+        { lookId: look.id, finishReason: completion.choices[0]?.finish_reason },
+        "Styling addendum agent returned empty content; continuing without it",
+      );
+      return null;
+    }
     const addendum = JSON.parse(raw) as StylingAddendum;
-    logger.debug({ lookId: look.id, stylingAddendum: addendum }, "Styling addendum generated");
+    logger.info({ lookId: look.id, stylingAddendum: addendum }, "Styling addendum generated");
     return addendum;
   } catch (err) {
     logger.warn({ err, lookId: look.id }, "Styling addendum agent failed; continuing without it");
@@ -264,11 +285,16 @@ async function writeStylingAddendum(
  * the input image skips any downscaling before the model sees the photo;
  * quality: 'high' on the output tool improves fidelity further.
  *
- * Requires the OpenAI organization to be "Verified" (platform.openai.com ->
- * Settings -> Organization) to call gpt-4o (or similar) via the Responses
- * API with the image_generation tool — an unverified org gets a 403. If
- * that happens (or any other failure), the caller falls back to
- * editViaImagesEdit below rather than failing the whole request.
+ * Some mainline models require the OpenAI organization to be "Verified"
+ * (platform.openai.com -> Settings -> Organization) to be used via the
+ * Responses API with the image_generation tool — confirmed live that
+ * `gpt-4o` specifically hits a 403 for this on an otherwise-working
+ * account/key, while `gpt-5.5` (this file's RECOMMENDATION_MODEL default,
+ * see openai-client.ts) does not require verification and works
+ * immediately. If that changes, or a 403 shows up again, the caller falls
+ * back to editViaImagesEdit below rather than failing the whole request —
+ * but check which model is actually configured first, since this has now
+ * been a real, verified model-specific gap, not just an account state.
  */
 async function editViaResponsesApi(
   openai: ReturnType<typeof getOpenAIClient>,
