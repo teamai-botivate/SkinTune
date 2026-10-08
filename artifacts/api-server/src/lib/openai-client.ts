@@ -10,9 +10,7 @@ let client: OpenAI | null = null;
  */
 export function getOpenAIClient(): OpenAI {
   if (client) return client;
-  const apiKey =
-    process.env["OPENAI_API_KEY"] ||
-    "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";
+  const apiKey = process.env["OPENAI_API_KEY"];
   if (!apiKey) {
     throw new Error(
       "OPENAI_API_KEY is not set. Configure it as an environment variable " +
@@ -24,5 +22,5 @@ export function getOpenAIClient(): OpenAI {
   return client;
 }
 
-export const RECOMMENDATION_MODEL = process.env["gpt-5.5"] ?? "gpt-4o";
-export const IMAGE_MODEL = process.env["gpt-image-2.5-flare"] ?? "gpt-image-2";
+export const RECOMMENDATION_MODEL = process.env["OPENAI_TEXT_MODEL"] ?? "";
+export const IMAGE_MODEL = process.env["OPENAI_IMAGE_MODEL"] ?? "";
