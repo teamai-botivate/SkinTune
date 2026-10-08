@@ -69,6 +69,8 @@ export const LookRecommendationSchema = z.object({
   reasoning: z.array(z.string()),
   confidence: z.number(),
   imageUrl: z.string(),
+  // Applicable categories for shopping / styling (dynamically determined based on profile & persona)
+  applicableCategories: z.array(z.string()).optional(),
 });
 export type LookRecommendation = z.infer<typeof LookRecommendationSchema>;
 
@@ -76,6 +78,80 @@ export const OccasionContextSchema = z.object({
   occasion: z.string(),
   details: z.string(),
 });
+
+// ---- /api/product-recommendations ----
+
+export const ProductCategorySchema = z.enum([
+  "outfit",
+  "makeup",
+  "jewellery",
+  "accessories",
+  "footwear",
+]);
+export type ProductCategory = z.infer<typeof ProductCategorySchema>;
+
+export const PriceTierSchema = z.enum(["budget", "mid", "premium"]);
+export type PriceTier = z.infer<typeof PriceTierSchema>;
+
+export const ProductResultSchema = z.object({
+  id: z.string(),
+  category: ProductCategorySchema,
+  subcategory: z.string(),
+  recommendedItemTitle: z.string().optional(),
+  brand: z.string(),
+  productName: z.string(),
+  retailer: z.string(),
+  price: z.number().optional(),
+  formattedPrice: z.string().optional(),
+  originalPrice: z.number().optional(),
+  formattedOriginalPrice: z.string().optional(),
+  currency: z.string().default("INR"),
+  priceTier: PriceTierSchema.optional(),
+  priceVerified: z.boolean().default(false),
+  productVerified: z.boolean().default(false),
+  shade: z.string().optional(),
+  color: z.string().optional(),
+  material: z.string().optional(),
+  description: z.string().optional(),
+  imageUrl: z.string().optional(),
+  productUrl: z.string().url(),
+  urlType: z.enum(["exact_product", "search_result"]).default("exact_product"),
+  isVerified: z.boolean().optional(),
+  matchScore: z.number().min(0).max(100).optional(),
+  matchReason: z.string(),
+  availability: z.string().default("In Stock"),
+  source: z.string().optional(),
+  lastChecked: z.string().optional(),
+});
+export type ProductResult = z.infer<typeof ProductResultSchema>;
+
+export const ProductGroupSchema = z.object({
+  category: ProductCategorySchema,
+  recommendedItemTitle: z.string(),
+  stylingRequirement: z.string(),
+  products: z.array(ProductResultSchema),
+});
+export type ProductGroup = z.infer<typeof ProductGroupSchema>;
+
+export const ProductRecommendationsRequestSchema = z.object({
+  look: LookRecommendationSchema,
+  profile: SkinTuneProfileSchema,
+  category: z.enum(["outfit", "makeup", "jewellery", "accessories", "footwear", "all"]).optional(),
+});
+export type ProductRecommendationsRequest = z.infer<typeof ProductRecommendationsRequestSchema>;
+
+export const ProductRecommendationsResponseSchema = z.object({
+  lookId: z.string(),
+  persona: z.enum(["woman", "man", "child", "neutral"]),
+  applicableCategories: z.array(z.string()),
+  products: z.array(ProductResultSchema),
+  groups: z.array(ProductGroupSchema).optional(),
+  status: z.enum(["success", "partial", "unavailable"]),
+  disclaimer: z.string().optional(),
+  searchedAt: z.string(),
+  totalFound: z.number(),
+});
+export type ProductRecommendationsResponse = z.infer<typeof ProductRecommendationsResponseSchema>;
 
 // ---- /api/recommendations ----
 

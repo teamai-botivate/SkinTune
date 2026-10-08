@@ -7,7 +7,9 @@ import {
   ArrowLeft, ArrowRight, Camera, Check, CheckCircle2, ChevronDown, ChevronRight,
   CircleHelp, Clock3, Download, FileText, Heart, Info, LockKeyhole, Pencil, RefreshCw,
   RotateCcw, Save, ShieldCheck, Sparkles, Trash2, Upload, Wand2, X, SlidersHorizontal,
+  ShoppingBag,
 } from 'lucide-react';
+import { ShopLookSection } from './components/shop-look-section';
 import { getLookRecommendations } from './services/recommendation-engine';
 import { generateLookImages, refineLookImage } from './services/image-generation';
 import { analyzePhoto } from './services/photo-analysis';
@@ -19,6 +21,7 @@ import {
   restrictionOptions, styleOptions, type SelectOption,
 } from './data/options';
 import type { LookRecommendation, PhotoStatus, SkinTuneProfile } from './types';
+import { LandingPage } from './components/landing/LandingPage';
 
 const queryClient = new QueryClient();
 
@@ -430,15 +433,28 @@ function AppearanceStep({ profile, onNext, onPhoto, onBack }: { profile: SkinTun
 
 // ---------- Marketing / generating / results screens ----------
 
-function Welcome({ onStart, onPrivacy }: { onStart: () => void; onPrivacy: () => void }) {
-  return <div className="noise min-h-[100dvh] overflow-hidden"><div className="mx-auto flex min-h-[100dvh] max-w-6xl flex-col px-5 py-6 sm:px-10">
-    <header className="flex items-center justify-between"><div className="flex items-center gap-2"><span className="grid size-10 place-items-center rounded-[14px] bg-primary text-primary-foreground"><Sparkles size={19} /></span><span className="font-serif text-2xl font-semibold">SkinTune</span></div><button type="button" onClick={onPrivacy} data-testid="button-welcome-privacy" className="focus-ring rounded-full px-3 py-2 text-sm font-semibold text-muted-foreground hover:bg-secondary">Privacy, plainly</button></header>
-    <div className="relative grid flex-1 items-center gap-12 py-16 lg:grid-cols-[1.05fr_.95fr] lg:gap-24">
-      <div className="relative z-10 animate-rise"><p className="mb-5 text-xs font-bold uppercase tracking-[.24em] text-primary">A personal styling journal</p><h1 className="max-w-3xl font-serif text-[clamp(3.7rem,9vw,8.3rem)] leading-[.84] tracking-[-.06em]">Dress like<br /><em className="text-primary">yourself.</em></h1><p className="mt-8 max-w-lg text-lg leading-relaxed text-muted-foreground">SkinTune turns your real life, your coloring, and your point of view into supportive styling guidance that feels unmistakably yours.</p><button type="button" onClick={onStart} data-testid="button-start" className="focus-ring mt-9 inline-flex items-center gap-3 rounded-full bg-primary px-7 py-4 font-bold text-primary-foreground shadow-[0_12px_26px_hsl(var(--primary)/.22)] transition hover:-translate-y-1">Start your edit <ArrowRight size={18} /></button><p className="mt-5 flex items-center gap-2 text-xs text-muted-foreground"><LockKeyhole size={13} /> Private by design · about 4 minutes</p></div>
-      <div className="relative mx-auto aspect-square w-full max-w-[470px] animate-floaty"><div className="absolute inset-[8%] rounded-[45%_55%_49%_51%/42%_43%_57%_58%] bg-secondary/80" /><div className="absolute inset-[17%] rounded-[52%_48%_42%_58%/54%_43%_57%_46%] border border-primary/20 bg-[#e8b493]" /><div className="absolute left-[31%] top-[28%] h-[45%] w-[39%] rounded-[45%_55%_48%_52%/40%_38%_62%_60%] bg-[#6d4038] shadow-[12px_22px_0_#cb7e61]" /><div className="absolute bottom-[19%] left-[22%] right-[20%] h-[26%] rounded-t-[50%] bg-accent" /><div className="absolute bottom-[12%] left-[31%] h-[10%] w-[37%] rounded-full bg-primary/85" /><div className="absolute -right-3 top-[17%] rounded-2xl border border-border bg-card px-4 py-3 shadow-xl"><p className="text-[10px] font-bold uppercase tracking-[.16em] text-muted-foreground">Your palette</p><div className="mt-2 flex gap-1.5"><i className="size-5 rounded-full bg-[#c9a35c]" /><i className="size-5 rounded-full bg-[#1c1917]" /><i className="size-5 rounded-full bg-[#e8d5a3]" /><i className="size-5 rounded-full bg-[#8a6d3f]" /></div></div><div className="absolute -bottom-1 -left-3 max-w-[180px] rounded-2xl border border-border bg-card px-4 py-3 shadow-xl"><p className="text-sm font-semibold leading-tight">Not a score.<br /><span className="text-primary">A point of view.</span></p></div></div>
-    </div>
-    <footer className="flex flex-wrap justify-between gap-4 border-t border-border/70 py-5 text-xs text-muted-foreground"><span>Made for getting dressed, not getting judged.</span><span>SkinTune · 2025</span></footer>
-  </div></div>;
+function Welcome({
+  onStart,
+  onPrivacy,
+  onQuickStart,
+  hasExistingProfile,
+  onGoHome,
+}: {
+  onStart: () => void;
+  onPrivacy: () => void;
+  onQuickStart?: (occasion: string) => void;
+  hasExistingProfile?: boolean;
+  onGoHome?: () => void;
+}) {
+  return (
+    <LandingPage
+      onStart={onStart}
+      onPrivacy={onPrivacy}
+      onQuickStart={onQuickStart}
+      hasExistingProfile={hasExistingProfile}
+      onGoHome={onGoHome}
+    />
+  );
 }
 
 // A real generated image is a data: URL (base64, from the mock/AI image
@@ -510,15 +526,19 @@ function Generating() {
   </div></div>;
 }
 
-function Home({ profile, savedLooks, generatedLooks, onNew, onResults, onSettings, onLook, onQuickStart }: {
+function Home({ profile, savedLooks, generatedLooks, onNew, onResults, onSettings, onLook, onQuickStart, onDiscover }: {
   profile: SkinTuneProfile; savedLooks: string[]; generatedLooks: LookRecommendation[]; onNew: () => void; onResults: () => void;
-  onSettings: () => void; onLook: (id: string) => void; onQuickStart: (occasion: string) => void;
+  onSettings: () => void; onLook: (id: string) => void; onQuickStart: (occasion: string) => void; onDiscover: () => void;
 }) {
   return <div className="noise min-h-[100dvh]"><Header onSettings={onSettings} name={profile.name} /><main className="mx-auto max-w-6xl px-4 py-10 sm:px-8 sm:py-16">
     <div className="grid gap-10 lg:grid-cols-[1.1fr_.9fr] lg:items-end">
       <div className="animate-rise"><p className="text-xs font-bold uppercase tracking-[.22em] text-primary">How can SkinTune style you today?</p><h1 className="mt-4 max-w-2xl font-serif text-[clamp(3rem,7vw,6.2rem)] leading-[.88] tracking-[-.05em]">Good to see you,<br /><em className="text-primary">{profile.name}.</em></h1><p className="mt-6 max-w-lg text-lg leading-relaxed text-muted-foreground">Pick a moment to get dressed for, or pick up where you left off.</p>
         <div className="mt-7 flex flex-wrap gap-2">{homeOccasionShortcuts.map((item) => <button type="button" key={item.label} onClick={() => onQuickStart(item.label)} data-testid={`button-quickstart-${item.label.toLowerCase().replace(/\s+/g, '-')}`} className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-semibold transition hover:-translate-y-0.5 hover:border-primary/50"><span aria-hidden>{item.icon}</span>{item.label}</button>)}</div>
-        <div className="mt-6 flex flex-wrap gap-3"><button type="button" onClick={onResults} data-testid="button-view-looks" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3.5 text-sm font-bold text-primary-foreground shadow-lg">View your five looks <ArrowRight size={16} /></button><button type="button" onClick={onNew} data-testid="button-new-edit" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-6 py-3.5 text-sm font-bold hover:border-primary/50"><RefreshCw size={16} /> New edit</button></div>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <button type="button" onClick={onResults} data-testid="button-view-looks" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3.5 text-sm font-bold text-primary-foreground shadow-lg">View your five looks <ArrowRight size={16} /></button>
+          <button type="button" onClick={onNew} data-testid="button-new-edit" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-6 py-3.5 text-sm font-bold hover:border-primary/50"><RefreshCw size={16} /> New edit</button>
+          <button type="button" onClick={onDiscover} data-testid="button-discover-guide" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-6 py-3.5 text-sm font-bold hover:border-primary/50"><Sparkles size={16} /> Styling Guide</button>
+        </div>
       </div>
       <div className="soft-grid relative overflow-hidden rounded-[1.7rem] border border-border bg-secondary/60 p-7"><div className="absolute -right-14 -top-14 size-48 rounded-full bg-primary/15 blur-2xl" /><p className="relative text-xs font-bold uppercase tracking-[.16em] text-muted-foreground">Your signature direction</p><h2 className="relative mt-3 font-serif text-3xl">Rich, considered, quietly luxe.</h2><div className="relative mt-7 flex items-end gap-2"><div className="h-20 w-12 rounded-t-full bg-[#c9a35c]" /><div className="h-28 w-12 rounded-t-full bg-[#1c1917]" /><div className="h-16 w-12 rounded-t-full bg-[#e8d5a3]" /><div className="h-24 w-12 rounded-t-full bg-[#8a6d3f]" /></div><p className="relative mt-6 text-sm leading-relaxed text-muted-foreground">Your saved palette leans into depth and gold, with room for one clear surprise.</p></div>
     </div>
@@ -545,7 +565,32 @@ function Results({ profile, looks: resultLooks, savedLooks, onSave, onLook, onFe
             </dl>
           </div>
         </button>
-        <div className="flex items-center justify-between border-t border-border/70 px-4 py-3"><span className="flex items-center gap-2"><span className="flex gap-1.5">{look.palette.map((color) => <i key={color} className="size-4 rounded-full border border-card shadow-sm" style={{ backgroundColor: color }} />)}</span><span className="text-xs font-semibold text-muted-foreground">{look.confidence}% confidence</span></span><button type="button" onClick={() => onSave(look.id)} data-testid={`button-save-${look.id}`} className={`focus-ring inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold ${savedLooks.includes(look.id) ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary'}`}>{savedLooks.includes(look.id) ? <Check size={14} /> : <Heart size={14} />} {savedLooks.includes(look.id) ? 'Saved' : 'Save'}</button></div>
+        <div className="flex items-center justify-between border-t border-border/70 px-4 py-3">
+          <span className="flex items-center gap-2">
+            <span className="flex gap-1.5">
+              {look.palette.map((color) => <i key={color} className="size-4 rounded-full border border-card shadow-sm" style={{ backgroundColor: color }} />)}
+            </span>
+            <span className="text-xs font-semibold text-muted-foreground">{look.confidence}% confidence</span>
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onLook(look.id)}
+              data-testid={`button-shop-${look.id}`}
+              className="focus-ring inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary transition hover:bg-primary hover:text-primary-foreground"
+            >
+              <ShoppingBag size={13} /> Shop look
+            </button>
+            <button
+              type="button"
+              onClick={() => onSave(look.id)}
+              data-testid={`button-save-${look.id}`}
+              className={`focus-ring inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold ${savedLooks.includes(look.id) ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary'}`}
+            >
+              {savedLooks.includes(look.id) ? <Check size={14} /> : <Heart size={14} />} {savedLooks.includes(look.id) ? 'Saved' : 'Save'}
+            </button>
+          </div>
+        </div>
       </article>;
     })}</div>
     <div className="mt-10 rounded-2xl border border-border bg-secondary/55 p-5 text-sm text-muted-foreground"><div className="flex items-start gap-3"><Info size={17} className="mt-0.5 shrink-0 text-primary" /><p>Style visualisation — actual fit, fabric fall and real-world colour may vary. These looks are starting points shaped around your answers; keep what feels like you, skip what doesn’t, and tell us what to change.</p></div></div>
@@ -589,6 +634,17 @@ function LookDetail({ look, profile, saved, onSave, onBack, onFeedback, onRefine
     }
   };
 
+  const pronouns = (profile.pronouns || '').toLowerCase();
+  const age = (profile.ageGroup || '').toLowerCase();
+  const isChild =
+    age.includes('kids') ||
+    age.includes('0–12') ||
+    age.includes('0-12') ||
+    age.includes('child') ||
+    pronouns.includes('kids') ||
+    pronouns.includes('children');
+  const isMan = !isChild && pronouns.includes('men');
+
   return <div className="noise min-h-[100dvh]"><Header onBack={onBack} onSettings={onBack} /><main className="mx-auto max-w-6xl px-4 py-8 sm:px-8 sm:py-14"><div className="grid gap-8 lg:grid-cols-[.9fr_1.1fr] lg:items-start">
     <div>
       <LookVisual look={look} large />
@@ -615,9 +671,9 @@ function LookDetail({ look, profile, saved, onSave, onBack, onFeedback, onRefine
       <div className="mt-10 grid gap-3 sm:grid-cols-2">
         <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">👗 Outfit</p><p className="mt-2 font-semibold">{look.outfit}</p></div>
         <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">🎨 Colour</p><p className="mt-2 font-semibold">{look.outfitColor}</p></div>
-        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">💎 Jewellery</p><p className="mt-2 font-semibold">{look.jewellery}</p></div>
-        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">💇 Hairstyle</p><p className="mt-2 font-semibold">{look.hairstyle}</p></div>
-        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">💄 Makeup</p><p className="mt-2 font-semibold">{look.makeup}</p></div>
+        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{isChild ? '🧸 Accessories' : isMan ? '⌚ Watches & Accessories' : '💎 Jewellery'}</p><p className="mt-2 font-semibold">{isChild ? look.accessories : look.jewellery}</p></div>
+        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">💇 Hairstyle & Grooming</p><p className="mt-2 font-semibold">{look.hairstyle}</p></div>
+        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{isChild ? '☀️ Skin' : isMan ? '✨ Grooming' : '💄 Makeup'}</p><p className="mt-2 font-semibold">{isChild ? 'Child-friendly natural skin (no cosmetics)' : isMan ? (look.makeup || 'Clean natural grooming') : look.makeup}</p></div>
         <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">👠 Footwear</p><p className="mt-2 font-semibold">{look.footwear}</p></div>
         <div className="rounded-2xl border border-border bg-card p-4 sm:col-span-2"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">👜 Accessories</p><p className="mt-2 font-semibold">{look.accessories}</p></div>
       </div>
@@ -626,7 +682,10 @@ function LookDetail({ look, profile, saved, onSave, onBack, onFeedback, onRefine
       <p className="mt-5 text-xs leading-relaxed text-muted-foreground">Style visualisation — actual fit, fabric fall and real-world colour may vary.</p>
       <div className="mt-8 flex flex-wrap gap-3"><button type="button" onClick={onSave} data-testid="button-detail-save" className={`focus-ring inline-flex items-center gap-2 rounded-full px-5 py-3 text-sm font-bold ${saved ? 'bg-secondary' : 'bg-primary text-primary-foreground'}`}>{saved ? <Check size={16} /> : <Save size={16} />} {saved ? 'Saved to your journal' : 'Save this look'}</button><button type="button" onClick={onFeedback} data-testid="button-detail-not-for-me" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold hover:border-primary/50"><X size={16} /> Not my style</button></div>
     </div>
-  </div></main></div>;
+  </div>
+  {/* Real Product Shopping Section */}
+  <ShopLookSection look={look} profile={profile} />
+  </main></div>;
 }
 
 function Feedback({ feeling, setFeeling, changeAreas, toggleChangeArea, request, setRequest, onBack, onDone }: {
@@ -694,8 +753,8 @@ function SkinTune() {
 
   const currentLook = useMemo(() => generatedLooks.find((item) => item.id === detailId) || generatedLooks[0], [generatedLooks, detailId]);
 
-  if (screen === 'welcome') return <Welcome onStart={() => go('name')} onPrivacy={() => go('settings')} />;
-  if (screen === 'home') return <Home profile={profile} savedLooks={savedLooks} generatedLooks={generatedLooks} onNew={() => { update({ photoUrl: '' }); go('name'); }} onResults={() => go(generatedLooks.length ? 'results' : 'generating')} onSettings={openSettings} onLook={(id) => { setDetailId(id); go('detail'); }} onQuickStart={(occasion) => { update({ occasion }); go('final-prefs'); }} />;
+  if (screen === 'welcome') return <Welcome onStart={() => go('name')} onPrivacy={() => go('settings')} onQuickStart={(occasion) => { update({ occasion }); go(profile.name ? 'final-prefs' : 'name'); }} hasExistingProfile={Boolean(profile.name)} onGoHome={() => go('home')} />;
+  if (screen === 'home') return <Home profile={profile} savedLooks={savedLooks} generatedLooks={generatedLooks} onNew={() => { update({ photoUrl: '' }); go('name'); }} onResults={() => go(generatedLooks.length ? 'results' : 'generating')} onSettings={openSettings} onLook={(id) => { setDetailId(id); go('detail'); }} onQuickStart={(occasion) => { update({ occasion }); go('final-prefs'); }} onDiscover={() => go('welcome')} />;
   if (screen === 'settings') return <Settings profile={profile} deletedNotice={deletedNotice} onBack={() => go(profile.name ? 'home' : 'welcome')} onDelete={() => { localStorage.removeItem('skintune-profile'); localStorage.removeItem('skintune-saved-looks'); localStorage.removeItem('skintune-feedback'); setProfile(initialProfile); setDeletedNotice(true); setTimeout(() => go('welcome'), 900); }} />;
   if (screen === 'photo') return <PhotoPanel profile={profile} update={update} onContinue={() => go('appearance')} onBack={back} />;
   if (screen === 'results') return <Results profile={profile} looks={generatedLooks} savedLooks={savedLooks} onSave={(id) => setSavedLooks((old) => old.includes(id) ? old.filter((item) => item !== id) : [...old, id])} onLook={(id) => { setDetailId(id); go('detail'); }} onFeedback={() => go('feedback')} onBack={() => go('home')} />;

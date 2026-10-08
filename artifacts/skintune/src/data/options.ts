@@ -9,13 +9,16 @@ export type SelectOption = {
 };
 
 export const pronounOptions: SelectOption[] = [
-  { label: 'Women’s styling' },
-  { label: 'Men’s styling' },
-  { label: 'Androgynous styling' },
+  { label: 'Women’s styling', description: 'Tailored silhouettes, beauty, makeup & jewellery direction' },
+  { label: 'Men’s styling', description: 'Sharp cuts, grooming, footwear & classic accessories' },
+  { label: 'Kids / Children’s styling', description: 'Playful, comfortable, age-appropriate outfits & accessories' },
+  { label: 'Androgynous styling', description: 'Clean lines, fluid proportions & versatile essentials' },
   { label: 'A mix of all three' },
 ];
 
 export const ageGroupOptions: SelectOption[] = [
+  { label: 'Kids (0–12)' },
+  { label: 'Teens (13–17)' },
   { label: 'Under 25' },
   { label: '25–34' },
   { label: '35–49' },
@@ -87,6 +90,7 @@ export const restrictionOptions: SelectOption[] = [
 ];
 
 export const occasionOptions: SelectOption[] = [
+  { label: 'Birthday', icon: '🎂' },
   { label: 'Wedding', icon: '💍' },
   { label: 'Party', icon: '🎉' },
   { label: 'Festival', icon: '🪷' },

@@ -22,5 +22,5 @@ export function getOpenAIClient(): OpenAI {
   return client;
 }
 
-export const RECOMMENDATION_MODEL = process.env["OPENAI_TEXT_MODEL"] ?? "gpt-4o";
-export const IMAGE_MODEL = process.env["OPENAI_IMAGE_MODEL"] ?? "gpt-image-2";
+export const RECOMMENDATION_MODEL = process.env["OPENAI_TEXT_MODEL"] ?? "";
+export const IMAGE_MODEL = process.env["OPENAI_IMAGE_MODEL"] ?? "";
