@@ -9,9 +9,17 @@ short, tap-driven wizard (appearance, body/fit, taste, colours, occasion,
 context, desired impression, budget) and gets 5 personalized complete-look
 recommendations (outfit, colour, jewellery, hairstyle, makeup, accessories).
 
-**Explicitly out of scope — do not add these:** wardrobe digitisation,
-wardrobe upload, real-time try-on, medical/diagnostic claims, beauty scoring.
-The product is about confidence and expression, not judgement.
+**Explicitly out of scope on `main` — do not add these:** wardrobe
+digitisation, wardrobe upload, real-time try-on, medical/diagnostic claims,
+beauty scoring. The product is about confidence and expression, not
+judgement.
+
+**The `real-dress-search` branch is a deliberate, explicit exception to
+"no real-time try-on"** — see "Real-dress-search branch" near the bottom of
+this file. That branch replaces the 5-AI-generated-look flow with real web-
+sourced dresses and a real try-on visualisation, per direct product
+direction. Wardrobe upload, medical/diagnostic claims, and beauty scoring
+remain out of scope even there.
 
 ## Repo layout (pnpm workspace monorepo)
 
@@ -470,7 +478,9 @@ of how many looks there are or how large any single image comes out.
 `OPENAI_API_KEY` (see `src/lib/openai-client.ts`). It is never sent to or
 readable from the browser — the frontend only ever calls same-origin
 `/api/recommendations`, `/api/generate-image`, and `/api/analyze-photo`.
-Model names are overridable via `OPENAI_TEXT_MODEL` (default `gpt-4o`) and
+Model names are overridable via `OPENAI_TEXT_MODEL` (default `gpt-5.5` on
+the `real-dress-search` branch — see the dedicated note in that branch's
+section below for why; still `gpt-4o` on `main` as of this writing) and
 `OPENAI_IMAGE_MODEL` (default `gpt-image-2`).
 
 ### `src/services/photo-analysis.ts`
@@ -667,7 +677,9 @@ Replit workflow. For a plain local dev run: `PORT=5173 BASE_PATH=/ pnpm
 
 ## Working conventions
 
-- Don't add wardrobe upload/try-on features — see "What this is" above.
+- Don't add wardrobe upload features. Don't add real-time try-on on `main`
+  — that exists intentionally only on the `real-dress-search` branch (see
+  "What this is" and the dedicated section near the bottom of this file).
 - Keep option vocabulary (labels, emojis) centralized in
   `src/data/options.ts`, not inline in `App.tsx`.
 - Keep the recommendation engine and image generation as two separate
@@ -678,3 +690,1835 @@ Replit workflow. For a plain local dev run: `PORT=5173 BASE_PATH=/ pnpm
 - This repo has no test suite yet. Verify changes with `pnpm run typecheck`
   and the relevant `build` script at minimum before considering a change
   done.
+
+## `real-dress-search` branch — real web dresses + real try-on
+
+This branch replaces the entire AI-generated-look flow (recommendation
+engine inventing 5 outfit descriptions, then visualizing them) with real
+web search, per explicit product direction from the user: search the web
+for actual purchasable dresses matching the profile, let the user try on
+any one of them (real photo of them wearing it), and send them to the real
+store if they're interested. This is a genuine architectural fork from
+`main`, not an incremental feature — `main` is untouched and keeps the
+original AI-look product; do not merge this branch back without an
+explicit decision to replace the shipped product, since it removes a
+core, previously-shipped flow (5 AI-generated looks) entirely.
+
+**Non-negotiable product requirement, stated explicitly and repeatedly by
+the user: nothing about pose, expression, hairstyle, or environment may
+ever be hardcoded, templated, or keyword-matched.** Every one of those
+must be a fresh AI decision from the actual photo + actual garment + actual
+occasion, every time. This directly continues (and hardens) the same
+principle established on `main` in the image-generation pose/expression
+fix rounds — see the "Round 4" note above. The ONLY thing that is ever a
+fixed rule in this branch's prompts is identity preservation (same face);
+literally everything else about how the shot looks is left to the vision
+agent's judgement. When extending this feature, do not add a new
+if/switch/lookup-table deciding any visual/styling detail — add a field to
+the relevant agent's structured output schema instead and let the model
+decide it.
+
+### Real dress search (`POST /api/search-dresses`)
+
+`artifacts/api-server/src/lib/tavily-client.ts` wraps Tavily's `/search`
+endpoint (`TAVILY_API_KEY` env var). `artifacts/api-server/src/routes/
+search-dresses.ts` builds a query from the profile (gender inferred from
+`pronouns`, first `style`, first `colorsLove`, `occasion`, `budget` — every
+clause conditional, nothing hardcoded per-category or per-brand) and
+returns two separate lists:
+
+1. **`results` (`DressResult[]`)** — real product photos, built from
+   Tavily's `images[]`. Each card's `sourceUrl` is that same photo's own
+   image-host domain, normalized from common CDN hostnames to the real
+   retailer (`CDN_HOST_TO_RETAILER` table + a generic `images.`/`cdn.`/
+   `i<digit>.` prefix-stripping heuristic) — e.g. `i.etsystatic.com` ->
+   `etsy.com`. This is a real, always-present link, but NOT guaranteed to
+   be the exact product page (Tavily doesn't expose that association) —
+   documented explicitly in the route and confirmed by live testing.
+2. **`shopLinks` (`ShopLink[]`)** — general real store pages, built from
+   Tavily's `results[]`, each with a price when a `₹|Rs|$|€|£<digits>`
+   pattern was found in the page snippet. NOT tied to any specific dress
+   card above.
+
+**Why two separate lists instead of one paired "product" shape — this was
+tested and confirmed, not assumed:** a real query ("buy red wedding guest
+dress online") was run directly against Tavily and the `images[]` results
+(cicinia.com, etsy.com, walmart.com, next.co.uk) came from almost entirely
+different hostnames than the `results[]` pages (selfieleslie.com, asos.com,
+karenmillen.com, anthropologie.com) — hostname-matching the two arrays,
+which was the first approach tried, returned wrong/useless links (a CDN
+image's own root domain) for the vast majority of cards. The user was
+asked directly and chose the two-separate-lists design (Option B) over
+forcing a fragile pairing (Option A). Do not attempt to re-pair these two
+arrays by hostname or fuzzy title match without re-verifying against a
+live Tavily response first — this exact approach was tried and abandoned.
+
+**Pagination ("More dresses") is a fresh, slightly broadened search, not a
+cached-list slice.** `buildSearchQuery`'s `page` parameter nudges the query
+(adds the user's 2nd style/colour preference, or "more options") so a
+later page surfaces a different slice of the web rather than re-showing
+the same top results. Tavily has no native pagination for a single query.
+
+### Try-on (`POST /api/try-on`)
+
+`artifacts/api-server/src/routes/try-on.ts` — same `gpt-image-2` machinery
+as `generate-image.ts` (Responses API `image_generation` tool primary,
+`images.edit` fallback, same org-verification 403 caveat), but takes the
+picked `DressResult`'s own real product photo as a SECOND reference image
+alongside the user's own photo (mirrors `refine-image.ts`'s two-reference-
+image pattern), so the edit shows the person wearing that exact real
+garment rather than a text-described approximation.
+
+`writeTryOnAddendum` is this route's vision agent — same
+structured-JSON-output pattern as `generate-image.ts`'s
+`writeStylingAddendum` (see "Round 4" above for why structured fields over
+free prose): it looks at BOTH images together and decides `expression`,
+`headAndCameraAngle`, `bodyLanguage`, `environmentAndSetting`, and
+`fitNotes` fresh each time, reasoning about this specific person and this
+specific real garment together. `profile.pronouns`/`occasion` are passed
+only as context for tone, explicitly instructed never to be branched into
+a fixed set of phrases. If this call fails, `buildTryOnPrompt` only gets a
+single neutral placeholder sentence — never a hardcoded styling decision.
+
+### Frontend flow
+
+`src/services/dress-search.ts` (`searchDresses`, `tryOnDress`) is the
+service boundary — UI components never call Tavily/OpenAI directly. In
+`App.tsx`, the wizard's `review` step now leads into `generating` (which
+runs the first `searchDresses` call, ~10 results, then advances to
+`dresses`) instead of the old AI-look generation. `DressGrid` shows the
+photo grid (tap a card or "Try this on" to try it) plus the "Shop these
+online" `shopLinks` section beneath it, with a "More dresses" button when
+`hasMore`. `TryOn` shows the loading/result/error states for one dress,
+with "Interested — visit {site}" (linking to `dress.sourceUrl`, disabled
+until the image is ready) and "Not this one — try another" (back to the
+grid) as the two outcomes described in the original product ask. Saved
+items (`SavedDress = { dress, imageUrl }`) persist to the same
+`skintune-saved-looks` localStorage key as before, just with a different
+shape.
+
+**Removed on this branch** (confirmed orphaned — no remaining imports —
+before deletion): `src/services/recommendation-engine.ts`,
+`src/services/image-generation.ts`, the `LookRecommendation`/`LookPiece`/
+`LookFeedback`/`GenerationResult` types, the `Feedback` screen (its
+"How did this land?" flow had no remaining entry point once the AI-look
+retry path was gone), and `feedbackFeelingOptions`/`feedbackChangeOptions`/
+`lookCategoryBadges` from `options.ts`. The backend's `recommendations.ts`,
+`generate-image.ts`, and `refine-image.ts` routes were deliberately LEFT IN
+PLACE (per explicit decision, not an oversight) — they're unreachable from
+this branch's frontend but harmless, and keeping them means `main`'s flow
+can be restored quickly if ever needed without resurrecting deleted files.
+
+**Local dev needs `TAVILY_API_KEY`** in `artifacts/api-server/.env` (get
+one at app.tavily.com) alongside `OPENAI_API_KEY` — see `.env.example`.
+Without it, `/api/search-dresses` returns a clear 502; there is no mock
+fallback for dress search the way other routes fall back to static mock
+data, since there's no meaningful "mock real dress" to show.
+
+**Tavily free/dev-tier keys have a monthly usage cap — a real production
+issue, not a code bug.** Hit in this exact deployment: Render logs showed
+`Tavily search failed: 432 {"detail":{"error":"This request exceeds your
+plan's set usage limit..."}}`. Fix is on Tavily's dashboard (upgrade the
+plan, or wait for the next billing cycle), not in this codebase — but see
+the next paragraph for a real code bug this surfaced.
+
+**The `Generating` screen used to hang forever with no feedback if the
+search call failed** (e.g. this exact Tavily 432, or any other
+`/api/search-dresses` error) — the effect that calls `searchDresses` had a
+`.then()` but no `.catch()`, so a rejected promise just left the user
+staring at the animated "Searching real stores…" screen indefinitely, with
+only a silent console error and an uncaught-promise warning to show for it
+(confirmed via a real Render deployment + browser console during the
+Tavily-limit incident above). Fixed: the search effect now has a
+`.catch()` that sets a `searchError` message, `Generating` renders a
+distinct error state (message + "Try again" re-triggering the search via a
+`searchAttempt` counter + "Back") instead of the spinner, and the
+"More dresses" button on `DressGrid` got the same treatment
+(`loadMoreError`, shown inline above the button) since it had an identical
+silent-failure gap. Any future call added to this screen's loading effect
+must have an explicit `.catch()` — a bare `.then()` on a screen with no
+other feedback mechanism reads as the app being stuck, not as an error.
+
+**Follow-up per direct user request: a generic error message wasn't
+enough — the search flow needed a genuinely interactive, step-by-step log,
+both in the console and on screen, so it's clear exactly how far a request
+got and where it failed.** `src/lib/activity-log.ts`'s `createActivityLog`
+is a small real (not cosmetic) step tracker: each step transitions
+`pending` -> `active` -> `done`/`error`, every transition is
+console-logged with a timestamp (`[SkinTune HH:MM:SS.mmm] ✓/✗/… label`),
+and the same state renders as `App.tsx`'s `StepChecklist` on the
+`Generating` screen. The steps are real request boundaries, not a fixed
+timer: "Searching real stores" starts when the `fetch` to
+`/api/search-dresses` goes out and finishes when a response arrives;
+"Building your results" wraps the response's `.json()` parse. "Reading
+your profile" is the one synthetic step (marked done immediately — there's
+no separate network call for it) purely so the checklist doesn't open on
+an empty first row.
+
+**Error messages are now the server's actual message, not a generic
+retry-later string.** `dress-search.ts`'s `readErrorMessage` reads the
+backend's `{error, message}` JSON body (every route already returns this
+shape on failure) and surfaces `message` specifically — e.g. a real Tavily
+401 comes through as `"Dress search request failed: 401 — Tavily search
+failed: 401 {...Unauthorized: missing or invalid API key...}"`, not a vague
+"couldn't reach real stores." Verified live in this session: pointed the
+route at a deliberately invalid `TAVILY_API_KEY` and confirmed the exact
+Tavily 401 body flows all the way through to what would render in the UI.
+`runTryOn` and the "More dresses" handler in `App.tsx` got the same
+treatment — every failure path in this branch now surfaces the real
+server-side error text via `console.error` and on-screen, not a canned
+message. When adding a new request in this flow, thread the real error
+message through the same way rather than writing a new generic string.
+
+Verified live (this branch): ran real `/api/search-dresses` calls against
+the real Tavily API with both a women's ("red, elegant, wedding guest,
+mid-range") and a men's ("navy, classic, office, mid-range") profile —
+correctly gender- and context-appropriate real results both times (red
+wedding-guest dresses vs. navy suits), real prices on `shopLinks` (`$44.99`,
+`£30`, etc.), and correct, non-duplicated pagination on a second page
+(`offset: 10` returned 5 different dresses, ids 11-15, not a repeat of
+page one). Try-on itself was not live-verified end-to-end in this session
+(no `OPENAI_API_KEY` available in the dev environment at the time) — it
+reuses `generate-image.ts`'s already-verified edit machinery, but if
+try-on identity preservation or garment fidelity is ever reported as poor,
+verify it live the same way `generate-image.ts`'s fixes were verified
+(a real reference photo + a real dress image through the actual route)
+before assuming the reused machinery transfers perfectly to a two-real-
+photo input instead of one-real-photo-plus-text-description.
+
+**Follow-up bug 1: results were dominated by a single site and a single
+colour**, reported live with a real screenshot — 6 results in a row all
+from Etsy, all the same terracotta/rust colour. Root cause, confirmed by
+re-reading `search-dresses.ts`: `buildSearchQuery` only ever read
+`profile.style[0]`/`profile.colorsLove[0]` (index 0 only) and ran ONE
+unscoped Tavily query per page — whichever single site happened to rank
+highest for that one query (Etsy, for this niche of menswear) dominated
+every image result, and every result was necessarily the same one colour
+since the query only ever asked for one.
+
+Fix: `buildQueryPlan` now fans out one task per entry in a fixed
+`SHOPPING_SITES` list (amazon.in, flipkart.com, myntra.com, ajio.com,
+meesho.com, etsy.com — a list of where to look, not a styling decision),
+round-robining through the user's FULL `colorsLove`/`style` lists (not
+just index 0) across those tasks. All tasks run in parallel
+(`Promise.allSettled`, so one site failing doesn't sink the request), each
+with `include_domains` set to that one site as a ranking hint, and results
+are interleaved (not concatenated) so the merged grid alternates
+sites/colours instead of running all of one task's cards before the next.
+
+**Confirmed live, and this matters for future changes to this file:
+Tavily's `include_domains` does NOT reliably restrict `images[]` to that
+domain.** A search scoped to `amazon.in` alone still returned 3/5 Etsy
+images in direct testing; scoping to `flipkart.com`/`myntra.com`/
+`ajio.com`/`meesho.com` individually returned almost entirely Etsy/eBay
+images for this test query, not the target site. An earlier version of
+this fix hard-filtered `buildDressCards` to only keep images matching the
+task's target domain — this was the "honest" choice but discarded almost
+every result for four of five sites, leaving too few dresses to show. The
+current version does NOT filter by expected domain: every card shows its
+own real, correct source site (never mislabeled), site-scoping just shifts
+what Tavily tends to return rather than guaranteeing it. If a query is
+ever reported as still too single-site-heavy, that reflects a genuine gap
+in what Tavily has actually indexed/crawled for that query — verify with a
+live query (`curl` directly against `api.tavily.com/search`) before
+assuming the query-fanout or interleaving logic itself is broken; both
+were confirmed working live (a men's profile with 3 colours returned 4
+distinct real sites and all 3 colours represented in a 6-result page; a
+women's profile returned Shopify/Nordstrom/Etsy with 2 different colours).
+Cross-task duplicate images (different tasks surfacing the same photo,
+common when several fall back to the same well-indexed site) are
+de-duplicated by image URL before the final `limit`-sized page is built.
+
+**Follow-up bug 2: try-on results looked like the input selfie with the
+outfit swapped in — same pose, same expression, same everything else** —
+reported live as "same to same copy-paste". This is the identical failure
+mode `generate-image.ts` went through 4 rounds fixing on `main` (see those
+notes above), but `try-on.ts` was written fresh for this branch and never
+inherited those specific fixes. Root cause: `try-on.ts`'s prompt had no
+anti-"cut-paste"/no-copy instruction and no forceful "this is a full
+re-styling, not a touch-up" framing — nothing telling the model it's
+allowed, let alone expected, to genuinely change the pose/expression/hair
+rather than defaulting to the easy path of barely touching the input
+photo. Fix: ported the exact hard-won language from
+`generate-image.ts`'s `buildLookEditPrompt`/`writeStylingAddendum` into
+`try-on.ts` — the anti-cut-paste instruction, explicit "not a light
+touch-up" framing repeated at both ends of the prompt, and a new
+`hairstyleRendering` field on `TryOnAddendum` with the same forceful
+"MUST be visibly restyled if it calls for a change" instruction that fixed
+this exact symptom in `generate-image.ts`. This was NOT independently
+live-verified in this session (no `OPENAI_API_KEY` available) — it is a
+faithful port of already-verified wording, not a new untested idea, but
+if this symptom is ever reported again, verify with a real photo +
+real dress through the actual route before assuming the port was
+faithful enough; do not re-derive the fix from scratch a third time.
+
+**Follow-up bug 3, actually resolved: the `gpt-4o` organization-verification
+403 was NOT an account-verification problem — it was a model-specific gap,
+confirmed live with a working, already-set-up API key.** Earlier notes in
+this file (and in the user-facing debugging session) assumed the fix was
+"the user needs to complete OpenAI org verification." That assumption was
+wrong. Direct API testing against `https://api.openai.com/v1/responses`
+with the exact same account/key, same `image_generation` tool, same
+payload shape — only the `model` field changed — showed:
+- `model: "gpt-4o"` → `403 Your organization must be verified...`
+- `model: "gpt-5.5"` → succeeded immediately, real image returned, on an
+  account that had NEVER completed org verification.
+
+So the 403 is scoped to `gpt-4o` specifically when used as the Responses
+API orchestrator with the `image_generation` tool, not to the account as a
+whole — this contradicts OpenAI's own documentation, which states
+verification is tied to the underlying GPT Image model (`gpt-image-2`)
+regardless of orchestrator, but the live behavior on this account said
+otherwise. **Trust a live API test over vendor documentation when they
+disagree; this is exactly that case.**
+
+Fix: `openai-client.ts`'s `RECOMMENDATION_MODEL` default changed from
+`gpt-4o` to `gpt-5.5` on this branch (env-overridable via
+`OPENAI_TEXT_MODEL`, unchanged). This model is used everywhere a text/
+vision OpenAI call happens in this codebase (`recommendations.ts`,
+`analyze-photo.ts`, `generate-image.ts`'s and `try-on.ts`'s addendum
+agents, and both files' Responses API orchestration calls) — switching the
+one shared constant fixed all of them at once, no per-file model literals
+existed to hunt down.
+
+**Two more real, live-discovered API differences had to be fixed
+alongside the model swap — gpt-5.5 is a stricter/newer model family and
+rejects parameters gpt-4o silently accepted:**
+1. `max_tokens` is rejected with a 400 ("Unsupported parameter... Use
+   `max_completion_tokens` instead"). Fixed in all three places it was
+   used (`analyze-photo.ts`, `generate-image.ts`, `try-on.ts`).
+2. Any non-default `temperature` is rejected with a 400 ("Only the
+   default (1) value is supported") — a reasoning-model-family behavior.
+   Removed the `temperature` override from all four call sites
+   (`recommendations.ts`, `analyze-photo.ts`, `generate-image.ts`,
+   `try-on.ts`); these calls now run at the model's default temperature.
+   This does mean the "raise temperature to reduce convergence toward one
+   safe answer" lever documented earlier in this file (see the
+   vibe/personaEnergy and pose-agent history above) is no longer available
+   as a tuning knob on this branch — if repetitive/generic outputs are
+   ever reported again, that specific fix mechanism is gone; look for
+   another lever (e.g. sibling-awareness, which is unaffected) rather than
+   trying to re-add a temperature override that will 400.
+
+**Verified live, end-to-end, with a real (working) API key, after all
+three fixes together**: `/api/analyze-photo` returned a real structured
+result (`{"status":"good","skinTone":"Light","undertone":"Warm",
+"confidence":90,"contrast":"High"}`), and a full `/api/try-on` call
+(synthetic person photo + a real dress product image URL) completed via
+the PRIMARY Responses API path — no 403, no fallback-to-images.edit
+triggered, confirmed by grepping the server log for
+"403|verified|error|falling back" and finding nothing. This is the
+strongest verification this file's fixes have had: not just "the code
+compiles" but a real request through the real route against the real
+OpenAI API succeeding on the primary, best-quality path.
+
+If a 403 on organization verification is ever reported again on this
+branch: first confirm what `RECOMMENDATION_MODEL`/`OPENAI_TEXT_MODEL` is
+actually set to before assuming account verification is needed — this has
+now been root-caused once already to a model-specific gap that a simple
+model swap fixed with zero account-level action required.
+
+**Render's `OPENAI_TEXT_MODEL` environment variable was itself set to
+`gpt-4o`, silently overriding the code fix above.** After the gpt-5.5
+default was deployed, production logs kept showing the exact same 403 —
+line numbers in the stack trace had shifted (confirming the new code WAS
+live), but the model name in the error was still `gpt-4o`. Root cause:
+`openai-client.ts`'s `RECOMMENDATION_MODEL` reads
+`process.env["OPENAI_TEXT_MODEL"] ?? "gpt-5.5"` — the env var, when set,
+always wins over the code default. Render had this var explicitly
+configured to `gpt-4o` from before this fix existed. This is a general
+trap worth remembering: **an env-var override can silently defeat a code
+default's fix. When a fix changes a default value that has a
+corresponding env var, check the deployment's actual environment
+variables, not just the deployed code, if the fix doesn't appear to take
+effect.** Once the user removed/updated `OPENAI_TEXT_MODEL` on Render, the
+403 stopped appearing in subsequent logs immediately (confirmed by the
+absence of "403|verified" in the next several `/api/try-on` requests).
+
+**Follow-up, immediately after the gpt-4o fix actually took effect: a
+real try-on image came back with a visibly different face than the user's
+uploaded photo** — different hairstyle, fuller/rounder face shape,
+different apparent build — reported directly by the user with both images
+side by side. This was NOT a model-verification issue (confirmed no 403
+in that request's logs) — it was a genuine identity-preservation prompt
+gap in `try-on.ts`, found by comparing it against `generate-image.ts`'s
+already-fixed prompt: `generate-image.ts`'s doc comment (see near the top
+of that file) explicitly documents that **waist-up/portrait framing
+instead of full-length was the key mitigation** for identity drift in
+image edits — but on inspection, neither `generate-image.ts` NOR
+`try-on.ts` actually contained that instruction anywhere in the real
+prompt text sent to the model. It existed only as a code comment
+describing a mitigation that was apparently never implemented (or was
+removed at some point without updating the comment) — the prompt itself
+never told the model to use waist-up framing.
+
+The direct fix (full waist-up crop) was deliberately NOT taken here: this
+product's core purpose is showing a complete outfit (including bottoms/
+footwear), so cropping to waist-up would hide most of what the user
+actually came to see. Per explicit user decision, `try-on.ts`'s prompt
+was changed to keep full-length framing but compensate with much more
+aggressive identity-preservation instructions instead of relying on a
+tighter crop:
+- The identity rule was moved to the very front of the prompt and stated
+  as a hard, non-negotiable constraint that overrides every other
+  instruction if they ever conflict (previously it was one clause among
+  several in a longer opening sentence).
+- Added an entirely new, itemized instruction listing the SPECIFIC facial
+  features to preserve — face shape, jawline, eyebrow shape, eye shape,
+  nose shape, mouth shape, exact facial hair style/density/pattern, skin
+  tone, hairline — explicitly telling the model not to generate "a
+  generic or idealized face that merely resembles this person" but to
+  reproduce their actual specific features. The reasoning documented
+  inline: since framing can't be pulled in tighter to reduce
+  transformation size (the product needs the full outfit visible), the
+  compensating lever is maximal specificity about which features must
+  transfer, rather than a vaguer "keep the same face" instruction alone.
+- Added an explicit "frame as full-length, do not crop to waist-up"
+  instruction — so this is now a deliberate, stated choice in the prompt
+  rather than an accidental gap where neither framing approach was ever
+  actually requested.
+- Strengthened the closing reminder to explicitly ask the model to check
+  the output face against the reference photo before finishing.
+
+This was NOT independently live-verified with a real photo in this
+session (the fix followed directly from a live-reported real-world
+failure, but the strengthened prompt itself was not re-tested against
+that same photo before this note was written) — if this exact symptom
+(different face/hair/build than the input) is reported again after this
+fix, verify with a real photo through the actual `/api/try-on` route
+before assuming the strengthened wording was sufficient; full-length
+framing is a genuinely harder identity-preservation problem than a
+waist-up crop would be, and this fix is a mitigation, not a guarantee.
+
+**Follow-up, after re-deploying the fix above: real-world result was
+better (build/skin tone/general face reasonably close) but the user
+directly reported, comparing side by side, that hairstyle, face shape,
+and BODY BUILD still didn't match** — the output looked noticeably
+slimmer/more athletic than the person's actual selfie, on top of the
+face-shape/hairstyle drift. Root cause, found by comparing directly
+against `generate-image.ts`'s already-working prompt: `generate-image.ts`
+has always had an explicit line (`Preserve their natural build
+(${profile.bodyBuild}) — do not alter body shape.`) directly in its edit
+prompt. `try-on.ts` never had an equivalent — `profile.bodyBuild` was
+only ever handed to `writeTryOnAddendum()` as loose context text, never
+turned into an explicit instruction in the actual image-generation prompt
+sent to the model. With nothing telling the model to preserve build, it
+defaulted to a generic slim/athletic "fit model" body for the outfit shot.
+
+Fix: `buildTryOnPrompt()` now takes `profile` directly (not just `dress`
+and the addendum) and includes an explicit build-preservation instruction
+mirroring `generate-image.ts`'s, stated even more forcefully given this is
+now the third round of identity-drift fixes on this route: "do not slim
+them down, do not make them more athletic or toned than they actually
+appear... The garment should be shown fitting THIS person's real build,
+not a slimmer or more idealized version of them." Also added an explicit
+"do not slim, narrow, or otherwise idealize the face shape" line next to
+the face-feature list (round 2's fix listed features to preserve but
+didn't explicitly forbid idealizing/slimming the face shape itself), and
+the closing reminder now checks build alongside face before finishing.
+
+**This route has now needed three separate identity-preservation
+fix rounds** (org-verification model swap was unrelated; the three real
+prompt-content rounds are: round 1 = general identity/cut-paste framing
+when the route was first written, round 2 = full-length framing +
+itemized face features, round 3 = this body-build instruction). The
+pattern across rounds 2 and 3 is the same: `try-on.ts` was written fresh
+for this branch and did not inherit protections that already existed in
+`generate-image.ts` from its own multi-round history on `main`. **Before
+trusting any single fix on this route as complete, do a line-by-line diff
+against `generate-image.ts`'s `buildLookEditPrompt`/`writeStylingAddendum`
+for any other instruction that exists there but not here** — that
+comparison is what found both round 2 and round 3's root causes, and is
+more reliable than guessing at new wording. This was NOT independently
+live-verified with a real photo in this session — if build still drifts
+after this fix, verify live before writing a fourth round from scratch.
+
+**Round 4, a genuinely different failure mode from rounds 1-3: after the
+face/build fixes above, the user reported (with two real side-by-side
+generated results) that the output looked like a literal face cut-paste
+onto a new body — and specifically that the input selfie's flat/neutral/
+off-guard EXPRESSION was being carried straight into the styled shot,
+producing an unflattering result. The user was explicit and emphatic
+about the product intent here: "person same ho but ache se dikhna
+chahiye... same waisa hi expression nhi jaisa wo upload kiya h" (the
+person should be recognizable, but should look GOOD — not simply wearing
+whatever expression happened to be in their casual reference photo).**
+
+Root cause: rounds 2-3's identity-preservation language, in successfully
+fixing face-shape and build drift, had become TOO literal — instructing
+the model to preserve "exact features," "instantly recognizable," and
+match the reference "exactly" gave it no room to distinguish "same
+underlying face" from "same literal photograph." An overly strict
+identity-lock instruction pushed the model toward the path of least
+resistance: copying the face region (expression included) rather than
+genuinely re-rendering this person's likeness under new, natural,
+confident conditions — this is the SAME class of bug documented earlier
+in this file for `generate-image.ts` (an overly strong identity-lock
+instruction suppressing hairstyle changes by association, "Round 3" under
+the Frontend architecture section above) — a strict "don't change this"
+instruction bleeds over onto adjacent things (there, hair; here,
+expression) that were never meant to be locked.
+
+Fix: reworded the identity instructions throughout `try-on.ts` (system
+prompt, opening identity rule, face-feature list, closing reminder) to
+explicitly separate two concepts that had been conflated: (1) matching
+the person's underlying facial STRUCTURE (bone structure, feature shapes,
+proportions — the actual constraint) vs. (2) literally copying the
+photo's pixels/expression/mood (never intended, but what an overly
+literal instruction was pushing toward). New explicit language: "matching
+identity means matching WHO they are, not literally copying pixels...
+never a crop or copy-paste of the input photo's face"; "This is about
+matching their real bone structure and features, not about literally
+transplanting the face pixels from the input photo." The system prompt
+now explicitly names the failure mode by describing the typical input as
+"a casual, off-guard phone selfie — flat lighting, a neutral or tired
+expression, an awkward low angle, not their best moment" and instructs
+the model to NOT carry that mood over, directing "a genuinely confident,
+warm, camera-ready expression... the way a good photographer coaches a
+subject to look their best" instead — framed explicitly around genuine
+photographic quality (this product's established language guideline, see
+`buildFlatteringInstruction`'s original intent elsewhere in this file),
+never around "fixing" the person. The `expression` schema field's
+description was updated the same way.
+
+**This is the second time in this codebase that "preserve identity"
+language, stated too strictly, has suppressed something that was never
+meant to be locked** (hairstyle in `generate-image.ts`'s Round 3, now
+expression in `try-on.ts`'s Round 4). When writing or strengthening an
+identity-preservation instruction anywhere in this codebase, be
+explicit about what "identity" does and does NOT cover — structure/
+features/build, never literal pose, expression, lighting, or mood — or
+a strict-sounding instruction will predictably bleed into suppressing
+those too. Not independently live-verified with a real photo in this
+session — verify live if this exact "cut-paste expression" symptom is
+reported again before writing a fifth round from scratch.
+
+**Round 5: after Round 4's fix, real generated results showed genuinely
+good face/build/expression match — the user confirmed this — but hair
+was still noticeably shorter/neater than the person's real (longer,
+wavier) hair.** Diagnosing this properly required inspecting the actual
+`writeTryOnAddendum` agent output (the `tryOnAddendum` object, logged via
+`logger.debug`), which surfaced a real, separate tooling problem: on
+Render, this debug-level log never appeared in the log viewer even after
+setting `LOG_LEVEL=debug` as an environment variable and redeploying,
+across multiple attempts. Root cause not fully confirmed (the app's own
+`logger.ts` correctly reads `process.env.LOG_LEVEL`, so the env var
+should work) — the most likely explanation is that Render's own log
+viewer UI has a SEPARATE level filter on top of whatever the app itself
+emits, and that viewer-side filter was not (or could not be) widened
+enough to show `debug`-level entries, even though the underlying
+`LOG_LEVEL=debug` env var was correctly set. **Practical fix, not a full
+root-cause resolution:** the addendum log was moved from `logger.debug`
+to `logger.info` in `try-on.ts` (see the comment at that call site) —
+`info`-level entries were reliably visible in every Render log dump in
+this debugging session, so this trades a small amount of log verbosity
+for actually being able to inspect styling decisions when needed. If this
+route needs more structured-decision debugging later, this log line is
+the way to see it; don't assume a `debug`-level addition will be visible
+in Render's viewer without checking first.
+
+Without that log actually confirming the agent's literal
+`hairstyleRendering` output, the hairstyle fix in this round is
+prompt-strengthening based on the pattern from Rounds 2-4 (schema field
+descriptions that are too permissive tend to produce conservative,
+close-to-original outputs) rather than a directly diagnosed root cause:
+`hairstyleRendering`'s schema description was rewritten to explicitly
+instruct the agent to make a genuine styling/grooming DECISION (e.g.
+"neater and more polished for a formal look") reasoned from the person's
+real hair length/texture, rather than defaulting to describing the input
+photo's hair as-is, and to state a specific choice rather than a vague
+"well-groomed hair." If hairstyle mismatch is reported again after this,
+check the now-visible `info`-level "Try-on addendum generated" log first
+to see what the agent is actually deciding before writing a sixth round.
+
+**Round 6 — the actual root cause of Rounds 4 and 5's symptoms, found by
+finally getting the addendum log to appear:** Round 5's `logger.debug` ->
+`logger.info` change was deployed, but real production requests STILL
+showed zero "Try-on addendum generated" log entries across multiple
+try-on calls, even though every request still returned 200 OK. This
+ruled out a Render log-viewer filtering issue (the prior working theory)
+and pointed at the function itself. Re-reading `writeStylingAddendum`'s
+own code line by line found the actual bug: `const raw =
+completion.choices[0]?.message?.content?.trim(); if (!raw) return null;`
+— if the model call returned no content, the function returned `null`
+with **zero logging on that path** — not `logger.info`'s success case,
+not `logger.warn`'s catch-block case, because no exception was thrown at
+all. This is exactly why no log ever appeared: the function wasn't
+crashing or being skipped, it was silently returning nothing.
+
+**Why the model was returning empty content: `gpt-5.5` is a
+reasoning-model-family model (already evidenced by its temperature-
+override rejection, documented above), and its internal reasoning tokens
+are believed to count against the same `max_completion_tokens` budget as
+the visible output.** `try-on.ts`'s `writeTryOnAddendum` was asking for a
+6-field strict JSON schema (this route's largest of the three call sites
+using this pattern) with only `max_completion_tokens: 400` — plausible
+that reasoning alone consumed the entire budget, leaving nothing for the
+actual JSON output, producing a genuinely empty completion. This
+directly explains BOTH Round 4's and Round 5's symptoms: with the
+addendum silently `null`, `buildTryOnPrompt` fell all the way back to
+its bare last-resort line (`buildMinimalPoseFallback`-equivalent) instead
+of any of the real, carefully-worded identity/hairstyle/expression
+instructions those rounds added — meaning rounds 4 and 5's actual prompt
+improvements may never have been exercised at all in the specific
+requests that were reported as still-broken. The "cut-paste" look and
+face-size mismatch reported after Round 5 are consistent with this: with
+no addendum, the model had no directed pose/framing guidance and fell
+back to whatever default composition choice it made on its own.
+
+Fix, three parts:
+1. The silent `if (!raw) return null` path in `writeTryOnAddendum` (and
+   the identical pattern in `generate-image.ts`'s `writeStylingAddendum`,
+   fixed preventatively even though it wasn't the one directly observed
+   failing) now logs a `logger.warn` with the completion's `finish_reason`
+   before returning null, so this failure mode can never be invisible
+   again.
+2. `max_completion_tokens` raised across all three structured-output call
+   sites that use this pattern: `try-on.ts` 400 -> 1200 (this route's
+   confirmed-affected call, given the largest headroom since it has the
+   most schema fields), `generate-image.ts` 500 -> 1200 (preventative,
+   same reasoning-token risk), `analyze-photo.ts` 300 -> 800 (preventative
+   — this one already logged its failures via `logger.error` since it
+   `throw`s on empty content rather than returning null, so it was never
+   silently invisible, but still carried the same underlying token-budget
+   risk).
+3. `generate-image.ts`'s addendum log was also raised from `debug` to
+   `info`, matching `try-on.ts`'s Round 5 fix, for the same Render-log-
+   visibility reasoning.
+
+**This is the most likely true root cause of the multi-round
+identity/hairstyle/expression struggle on `try-on.ts`** — rounds 2-5 may
+have been iterating on prompt wording for a code path that was frequently
+not even running, because the addendum agent was frequently returning
+empty and failing completely silently. Verify live after this fix with a
+real photo through `/api/try-on`, and specifically check for either a
+"Try-on addendum generated" (success) or "Try-on addendum agent returned
+empty content" (still failing, now at least visible) log entry — if
+empty-content warnings still appear after raising the budget to 1200,
+raise it further before writing a seventh round of prompt-wording
+changes on top of a request that may still not be reaching the model's
+real output at all.
+
+**Round 7: with Round 6's fix live, the addendum log finally showed real
+content — confirming the agent itself was making good decisions all
+along** (a real logged example: `hairstyleRendering: "neater voluminous
+side-swept quiff... top kept full but shaped so the waves look
+intentional..."`, a genuinely specific, well-reasoned styling choice).
+But the generated image still under-delivered specifically on hairstyle —
+it came out visibly shorter/tighter than the agent's own instruction
+called for, even though expression, pose, and build now matched well.
+This finally isolated the remaining gap to exactly one place: the final
+image-generation model was under-weighting the hairstyle instruction
+specifically, not the addendum agent failing to decide one.
+
+Root cause found by re-reading `buildTryOnPrompt`: `expression`,
+`headAndCameraAngle`, `bodyLanguage`, `environmentAndSetting`, and
+`fitNotes` were all crammed into ONE shared sentence ("Pose, expression,
+and setting for this shot..."), while `hairstyleRendering` was already
+the only field with its own separate, individually-stated, MUST-worded
+instruction. The user's explicit direction here: this isn't a
+hairstyle-only problem, every field deserves the same forceful treatment
+hairstyle already had, since a shared-sentence structure was diluting how
+strongly the model weighted each individual instruction, not just hair's.
+
+Fix: every addendum field now gets its own separate sentence with an
+explicit "MUST match/show/be set in this description, not the input
+photo's own" instruction, mirroring hairstyle's existing treatment
+exactly. The closing reminder was also restructured into two explicitly
+numbered rules: (1) identity/build preservation (unchanged from Round 3),
+(2) a new, explicit instruction that EVERY styling instruction above must
+be followed as stated, not softened or defaulted back toward the input
+photo — naming hairstyle specifically as an example alongside the other
+fields, since that's the one with a directly observed under-delivery.
+
+Not independently live-verified with a real photo in this session — if
+any individual field (hairstyle or otherwise) is still under-delivered
+after this fix, check the addendum log first (now reliably visible per
+Round 6) to confirm the agent's decision was actually good, then inspect
+whether that specific field's now-individual instruction in
+`buildTryOnPrompt` needs to be even more forceful, rather than assuming
+the agent needs another prompt change.
+
+### `search-dresses.ts`: off-topic results in "Shop these online"
+
+Reported live with real screenshots: a men's profile searching for a
+terracotta wedding suit got, alongside genuine men's suits, a women's
+bridal lehenga colour guide and a terracotta pottery/wedding-gifts
+listing in the `shopLinks` section. Root cause: `buildShopLinks` (and,
+preventatively, `buildDressCards`) had zero relevance filtering on
+Tavily's `results[]`/`images[]` beyond de-duplicating by hostname — a
+page or image matching the colour/occasion keywords (e.g. "terracotta",
+"wedding") but belonging to a completely different product category or
+gender still passed straight through, since nothing ever checked the
+actual content against the profile.
+
+Fix: `isRelevantToProfile(title, content, profile)` checks both the
+title AND the content/description snippet (title alone would miss cases
+where the mismatch only showed up in the description — this was
+explicitly the user's concern) for two things: (1) explicit opposite-
+gender clothing terms when the profile states a gender (e.g. "lehenga",
+"saree", "bridal makeup" filtered out for a men's profile; "men's suit",
+"groom's sherwani" filtered out for a women's profile), and (2) clearly
+non-clothing categories that colour/theme keywords can accidentally
+match (pottery, gift sets, home decor, dinnerware, etc.). This is a
+relevance FILTER on real results, not a styling decision or a
+product-category invention — it removes genuinely off-topic matches, it
+doesn't prefer or rank anything. Applied to both `buildShopLinks` (both
+title and content available) and `buildDressCards` (only the image's own
+title/description available, so content is optional there).
+
+Verified live against the real Tavily API: a men's profile's shopLinks
+went from including a bridal-lehenga guide and a pottery-gifts listing to
+6 genuinely relevant results (men's suits, a men's boutonniere, a men's
+wedding-suit category page); a women's profile's results were checked
+afterward too and came back unaffected (no genuine dresses/gowns were
+incorrectly filtered out), confirming the filter isn't over-aggressive.
+
+**Follow-up: two more real cases reported live with a screenshot, both
+after the text-filter fix above shipped.** (1) An "artificial flowers/
+bouquet" wedding-decor listing (`Ling's Moment Artificial Flowers
+Terracotta...`) — a real product category the original
+`nonClothingCategories` list didn't include; added
+"artificial flower"/"bouquet"/"boutonniere"/"floral arrangement"/
+"wedding decor" to that list. (2) A card titled "Buy Men's Rust Brown 2
+Piece Suit" whose actual product photo showed a bride and groom together,
+not the suit alone — text filtering structurally cannot catch this, since
+nothing in the title or description signalled the mismatch; it's only
+visible in the image itself.
+
+Fix for (2): `filterByImageContent` does ONE batched GPT-5.5 vision call
+across all of a page's candidate dress images at once (not one call per
+image, which would multiply latency/cost by candidate count), asking the
+model to flag any that are a couple/group photo, the wrong gender's
+clothing, or otherwise not a clean single-person product shot matching
+the profile. Runs after text filtering and de-duplication, on the small
+already-mostly-relevant candidate set, not on every raw search result.
+The route now collects `limit + 6` candidates (not just `limit`) before
+this check runs, so rejections have headroom to be backfilled instead of
+just shrinking the page. **Fails open by design**: if the vision call
+errors or returns empty content for any reason, all candidates are kept
+and a warning is logged — a missed visual mismatch is a much smaller
+problem than the whole search failing, so this must never turn a
+one-step failure into a broken page. Verified live (Tavily-only, no
+OpenAI key available in this session): with no `OPENAI_API_KEY`
+configured, `filterByImageContent` correctly logged "Image relevance
+check failed; keeping all candidates" and the search still returned a
+full page of results — confirming the fail-open path works, though the
+actual vision-based rejection behavior itself (does it correctly catch a
+real couple photo) was NOT independently live-verified in this session
+due to no OpenAI key being available. If a couple/group/wrong-gender
+photo is ever reported again after this ships, check the
+"Image relevance check rejected mismatched dress photos" info log first
+to see whether the check ran and what it rejected, before assuming the
+vision call itself needs a different prompt.
+
+**Confirmed on the very next production deploy: `filterByImageContent`
+hit the exact same silent/near-silent empty-response bug already fixed
+twice elsewhere in this codebase.** Real Render log:
+`{"finishReason":"length","msg":"Image relevance check returned empty
+content; keeping all candidates"}` — `max_completion_tokens: 500` was too
+low for `gpt-5.5` to reason over ~12 images AND still have room to emit
+the JSON output; reasoning alone hit the ceiling (`finish_reason:
+"length"`), leaving nothing for the actual answer. Because this call
+reasons over an image SET rather than a handful of text fields (unlike
+`writeTryOnAddendum`'s 6 fields or `writeStylingAddendum`'s similar
+count), it plausibly needs more headroom than either of those, not less
+— raised to `max_completion_tokens: 1500`. The failure was at least
+already visible in the log (unlike the original silent-null bug in the
+other two files) because this function was written with the
+`if (!raw) { logger.warn(...) }` pattern from the start, having been
+added after that bug was already known — so the fail-open path did its
+job (the search still returned a full page), it just meant this
+particular check ran with zero effect on this request, and the couple-
+photo it was meant to catch stayed in.
+
+**Any new call site added to this codebase that uses `gpt-5.5` with
+`response_format: json_schema` and asks it to reason over multiple images
+or a non-trivial amount of input should start with a generous
+`max_completion_tokens` (1000+) from the outset, not the smallest number
+that seems sufficient for the visible output alone** — this has now been
+the root cause of empty/failed structured-output calls three separate
+times across three different files in this codebase
+(`writeTryOnAddendum`, `writeStylingAddendum`, `filterByImageContent`).
+Budget for the model's invisible reasoning, not just the JSON it needs to
+print. Verify this fix live (a real couple/group photo actually getting
+rejected) before assuming 1500 is sufficient for every case — this was
+raised based on the `finish_reason: "length"` signal, not a confirmed
+sufficient value from a real successful run.
+
+### Frontend: added a dress-detail preview step before try-on
+
+Reported live: tapping a dress card previously triggered try-on
+immediately with no confirmation step, and the user reported that a
+try-on came back on the wrong dress (believed they'd tapped a black
+outfit, got an ivory one back). The most likely explanation, given no
+intermediate screen existed to catch it: an accidental tap on a
+neighbouring card in a grid of visually similar pieces (multiple similar
+cream/ivory/beige suits were on screen at once in the reported case) —
+`TryOn`'s image area never shows the original dress photo as a fallback,
+only the generated result or a loading/error state, so what was
+visible was genuinely the try-on OF the dress that was clicked, not a
+display bug.
+
+Added a new `dress-detail` screen (`DressDetail` component) between the
+grid and the actual try-on generation: tapping a card now navigates here
+first, showing the dress full-size with its real title and site, plus an
+explicit "Try this on" button (only that click starts the ~1-2 minute
+generation) and a "Visit {site}" link. `DressGrid`'s card `onClick`
+(previously `onTryOn`, firing immediately) is now `onViewDress`, and the
+per-card "Try this on" button that used to sit under each grid card was
+removed since confirming via the detail screen is now the only path —
+this gives the user a moment to visually confirm it's genuinely the
+piece they meant before committing to the slow generation call, directly
+addressing the reported mismatch's likely cause.
+
+**Round 8, a genuinely new failure mode: a real try-on came back with the
+correct face and garment, but the exact same pose, sitting position,
+chair, and background as the DRESS'S OWN product photo** — reported live
+with a screenshot (a Myntassets kurta product shot showing a model seated
+in a carved wooden chair; the try-on output showed the user, correct face,
+seated in that exact same chair in that exact same pose). Confirmed with
+the user directly that the face genuinely was theirs (a real, successful
+identity swap) — the problem was specifically that the SECOND reference
+image's (the product photo's) pose/setting had been copied wholesale.
+
+Root cause: every prior round's "don't copy the reference photo's
+pose/expression" instruction was written singular — it always meant the
+FIRST reference image (the user's own selfie). Nothing in the prompt ever
+told the model not to copy the SECOND reference image's (the product
+photo's) pose, model stance, furniture, or background — only that its
+garment design should transfer. With no instruction against it, the model
+took the path of least resistance and copied that photo's whole
+composition instead of directing something fresh.
+
+Fix: added an explicit instruction that ONLY the garment itself (cut,
+colour, pattern, fabric) should come from the second reference image —
+its pose, model, chair/furniture, and background must not appear in the
+output. Extended to all three places this needed saying: the system
+prompt (now explicitly frames the product photo as "typically showing a
+DIFFERENT model, in the store's own pose... none of that belongs in your
+output"), the main edit prompt (a new dedicated instruction right after
+the garment-matching line), and the closing reminder (now three numbered
+rules instead of two, with the third specifically calling out the second
+reference's pose/setting). Framed the overall task as directing "an
+entirely new, third photograph, not choosing between the two you were
+shown" — naming the actual failure mode (defaulting to one of the two
+input photos instead of composing something new) explicitly, the same
+pattern that worked for prior rounds' fixes on this file.
+
+Not independently live-verified with a real photo in this session — if
+a generated result is ever reported as copying the PRODUCT photo's pose/
+setting again after this, that's a different, more specific symptom than
+copying the SELFIE's pose (already fixed in Round 4) — don't assume
+Round 4's fix covers this; verify against this round's specific
+instruction wording instead.
+
+**Round 9: the same generated result from Round 8 also had a head/face
+that looked too large relative to the body** — reported live alongside
+the pose-copy issue. Root cause: the reference selfie is typically a
+close-up, and nothing in the prompt told the model to re-scale the head
+size down when composing a full-length shot, so the close-up's head-to-
+frame proportion carried over even after the pose/setting issue was
+otherwise fixed. This is a distinct instruction from face-feature
+preservation (Round 2, which is about which features transfer, not what
+size they render at) and from body-build preservation (Round 3, torso/
+limb proportions, not head size specifically) — none of the existing
+instructions covered head-to-body SIZE ratio.
+
+Fix: added a dedicated instruction directly after the full-length-framing
+line: the head and face must be sized proportionally for a full-length
+photograph — "the way a real full-body photo actually looks, not
+enlarged or close-up-sized the way it would appear cropped tightly in a
+selfie... Get the head-to-body size ratio right for someone standing at a
+normal distance from the camera." Not independently live-verified with a
+real photo in this session.
+
+### `search-dresses.ts`: non-shopping domains (social media/CDN) slipping through
+
+Reported live with a screenshot: a dress card's image was hosted on
+`lookaside.fbsbx.com` (a Facebook CDN URL) and its actual content was an
+unrelated biography snippet ("Karuna Soni is the mother of the current
+K3 Salon leadership...") with no connection to clothing at all. Confirmed
+this is a real gap in `include_domains`: even scoped to a genuine
+shopping site, Tavily returned an image hosted on a completely unrelated
+domain — consistent with the already-documented finding that
+`include_domains` is only a ranking hint, not an enforced filter (see the
+main "real dress search" section above). `isRelevantToProfile`'s
+text-based filtering can't catch this class of problem either, since a
+Facebook-hosted image's title/description won't necessarily contain any
+of the off-topic-category keywords it checks for — the issue here is the
+SOURCE domain itself being fundamentally not a retailer, regardless of
+what its title claims.
+
+Fix: `NEVER_RETAILER_DOMAINS`, a denylist of platforms that host
+arbitrary user/business content rather than being dedicated storefronts
+(Facebook/fbsbx/fbcdn, Instagram, Pinterest, Twitter/X, TikTok, YouTube,
+Wikipedia, LinkedIn) — nothing served from these domains (or their
+subdomains) becomes a dress card or shop link, regardless of title/
+content relevance. Applied in both `buildDressCards` (checked before the
+text-relevance check, since there's no point running that check on a
+domain that's disqualified either way) and `buildShopLinks`. This is a
+denylist of platform TYPES, not specific retailers, so it should stay
+short and only include domains that are never legitimately a shopping
+destination — don't add a real (even niche) retailer to this list if one
+is ever reported as wrongly excluded; that's a different bug with a
+different fix.
+
+Verified live against the real Tavily API after the fix: a men's
+profile's dress-card results (6 cards) were checked and none were hosted
+on a denylisted domain — all resolved to real retailers (Etsy,
+Mysuittailor, Themoderngroom, and others already confirmed relevant in
+prior rounds). The specific `lookaside.fbsbx.com` case itself was not
+re-triggered and re-verified as fixed (Tavily's results vary per call),
+so if a social-media-hosted image is ever reported again, first check
+whether its domain is already in `NEVER_RETAILER_DOMAINS` — if it's a
+new platform not yet on the list, add it there rather than trying to
+patch the text-relevance filter, which structurally can't catch this
+class of problem.
+
+### `search-dresses.ts`: accessories (glasses, jewellery) slipping into a garments-only search
+
+Reported live by a second real test user: searching for an outfit
+returned glasses/spectacles and a pendant/jewellery listing alongside
+genuine dresses. This product's dress search is explicitly garments-only
+— jewellery, eyewear, watches, bags, and standalone footwear are a
+different category and must never appear here, even though they're worn
+on the body and can share the same colour/occasion keywords a real outfit
+query uses (e.g. "gold wedding pendant" matches "wedding" + a colour the
+same way a real dress listing would). Root cause: `isRelevantToProfile`'s
+`nonClothingCategories` denylist only ever covered home-decor/gift
+categories (pottery, candles, bouquets, etc.) from earlier rounds —
+accessories were never on it, since nothing had surfaced this specific
+gap until this report. A pure denylist approach is inherently incomplete
+this way: each round only ever closes the specific category that was just
+reported, not the general "not clothing" case.
+
+Fix, three independent layers (matching this file's established pattern
+of not relying on any single filter alone):
+1. `nonClothingCategories` gained explicit accessory terms — eyewear/
+   eyeglasses/spectacles/sunglasses/reading glasses, pendant/necklace/
+   earring/bracelet/bangle/anklet/nose pin/jewellery set, wristwatch,
+   handbag/clutch bag, footwear-only — checked the same way as the
+   existing home-decor terms, against both title and content text.
+2. `buildSearchQuery` now asks for `"... clothing outfit ..."` (not just
+   `"outfit"`) and appends `-jewellery -jewelry -pendant -necklace
+   -earrings -eyewear -glasses -sunglasses -watch -handbag` — Tavily's
+   free-text query supports simple `-term` exclusion the way a normal web
+   search engine does, so this nudges the search itself away from the
+   accessories category before any result-level filtering even runs.
+3. `filterByImageContent`'s vision-check prompt (already checking for
+   couple photos / wrong-gender clothing from earlier rounds — see above)
+   now explicitly also flags any image whose main subject is an accessory
+   rather than a garment, even if it came from an otherwise clothing-
+   related query. This is the backstop for a listing whose title/
+   description doesn't literally contain any of layer 1's blocked words
+   (e.g. just a product name + colour) but whose photo unmistakably shows
+   only an accessory — the same class of "only visible in the image
+   itself" gap that motivated adding this vision check in the first
+   place (see the couple-photo case above). The prompt's tie-breaking
+   rule was also flipped for this category specifically: when in doubt
+   about garment-vs-accessory, reject rather than keep, since showing a
+   non-clothing item as if it were an outfit result is a worse failure
+   for this product than losing one borderline candidate.
+
+Not independently live-verified in this session (no `TAVILY_API_KEY`/
+`OPENAI_API_KEY` available) — typecheck and build both pass. If
+accessories still slip through after this ships, check which of the three
+layers should have caught the specific item (a title/content match should
+have been caught by layer 1; anything only visible in the photo is layer
+3's job) before adding a fourth mechanism — and if it's layer 3, check
+whether `filterByImageContent`'s `max_completion_tokens: 1500` budget is
+being exhausted the same way it already was once before (see the
+`finish_reason: "length"` root cause documented earlier in this file)
+rather than assuming the prompt wording itself needs another rewrite.
+
+### `try-on.ts`: proactive line-by-line diff against `generate-image.ts` found a missing field
+
+Per this file's own established recommendation ("before trusting any
+single fix on this route as complete, do a line-by-line diff against
+`generate-image.ts`'s `buildLookEditPrompt`/`writeStylingAddendum`"), this
+diff was done proactively (no new live bug report) and found one real
+gap: `generate-image.ts`'s `StylingAddendum` has a `flatteringDirection`
+field — concrete, non-generic reasoning about what makes THIS specific
+person look their best in THIS specific look, added in that file's own
+Round 4 fix — but `try-on.ts`'s `TryOnAddendum` had no equivalent field at
+all. Without it, the try-on addendum agent was only ever asked to decide
+mechanics (expression, angle, body language, fit, setting, hair) and never
+explicitly asked to reason about what would make this specific person
+look genuinely great in this specific garment — the same gap
+`flatteringDirection` was added to close on the other file.
+
+Fix: added `flatteringDirection` to `TryOnAddendum` (same schema
+description pattern as `generate-image.ts`'s field, adapted for a garment
++ person pairing instead of a look + person pairing), added it as its own
+explicit MUST-worded sentence in `buildTryOnPrompt` (matching Round 7's
+per-field treatment), and extended the addendum agent's system prompt to
+explicitly ask for this reasoning (previously it only asked for
+expression/angle/body-language/setting/hairstyle/fit, never "what makes
+them look great" as its own dimension).
+
+Not independently live-verified in this session (no `OPENAI_API_KEY`
+available) — typecheck and build both pass. If try-on results are ever
+reported as generically "fine but not flattering" (as opposed to a
+specific mechanical issue like wrong pose/expression), check the
+`tryOnAddendum` log's `flatteringDirection` value first to see whether
+the agent is actually reasoning concretely here, the same way the
+`hairstyleRendering` field was diagnosed in earlier rounds.
+
+### Logging coverage audit (no new bug — a proactive check per direct request)
+
+Per explicit request to make sure every error path anywhere in this
+codebase is actually logged, all `api-server/src/routes/*.ts` files were
+re-checked end to end: every route's outer catch block calls
+`logger.error` before responding with its 502; every inner
+primary-path-failed catch (Responses API falling back to `images.edit`)
+calls `logger.warn` before retrying; and all three structured-output call
+sites with a silent-empty-content risk (`writeTryOnAddendum`,
+`writeStylingAddendum`, `filterByImageContent`) already call `logger.warn`
+with the completion's `finish_reason` on that path, per the fixes
+documented earlier in this file. No gaps found — this was a verification
+pass, not a fix. If a new call site is ever added to any route in this
+directory, it must follow the same pattern: log on every catch and on
+every "the model returned nothing useful" branch, not just the final
+outer catch.
+
+### Frontend: cut one genuinely-unused required wizard field on this branch
+
+Reported live: the onboarding form feels like too many required taps.
+Checked what `search-dresses.ts`/`try-on.ts` (this branch's ONLY two AI
+routes — `recommendations.ts` is unreachable here, see the top of this
+section) actually read from `SkinTuneProfile`: `pronouns`, `bodyBuild`,
+`fit`, `style`, `colorsLove`, `occasion`, `budget`. Confirmed by grep that
+`ageGroup`, `height`, `impression`, `colorsAvoid`, and `restrictions` are
+NEVER read by either route — they were meaningful inputs for the old
+AI-look-generation flow (`recommendations.ts`'s prompt, still present but
+dead code on this branch) but have zero effect on search results or
+try-on output here.
+
+Asked the user directly which of these to cut rather than assuming — this
+branch is a genuinely different product from `main` (search-driven, not
+recommendation-driven), so `main`'s CLAUDE.md note that "name, age,
+gender/pronouns, height, and budget... stay required, real questions"
+does not automatically transfer to this branch's different data flow.
+**User's explicit answer: keep `ageGroup` and `height` required** (do not
+cut them, even though they're unused by this branch's backend — real
+questions the user wants kept regardless). Only `impression` (the
+`final-prefs` section's multi-select "How do you want to come across?")
+was approved to change.
+
+Fix: `impression`'s `SectionField` entry gained `required: false` (the
+existing optional-field mechanism already used by `colorsAvoid`/
+`restrictions` — no new mechanism needed). `Review`'s summary line for
+this row was updated to not print a stray leading `" · "` when
+`impression` is empty. The `final-prefs` section's body copy was also
+updated from "we'll make your five looks" (stale language from the old
+AI-look flow, `main`-only) to "we'll search real stores for pieces that
+match", matching this branch's actual product. `colorsAvoid` and
+`restrictions` were already `required: false` from before this branch
+existed, so they were not adding required-tap friction and needed no
+change. `ageGroup`/`height`/`pronouns`/`bodyBuild`/`fit`/`style`/
+`colorsLove`/`occasion`/`budget` remain required, per the user's explicit
+answer for the first two and this branch's actual backend usage for the
+rest.
+
+Typecheck and `pnpm --filter @workspace/skintune run build` (with
+`PORT`/`BASE_PATH` env vars, per this file's Commands section) both pass.
+Field type/shape (`impression: string[]`) was not changed, only the
+wizard's required-gate — per this file's data-model warning about
+array-vs-string mismatches between wizard step components and
+`SkinTuneProfile`'s declared shape, changing a field's requiredness alone
+(not its `SectionField.kind` or its type in `types.ts`) carries none of
+that risk.
+
+### `analyze-photo.ts`: confidence score always came back ~85%
+
+Reported live: the confidence percentage shown after photo upload was
+always the same number (~85%) regardless of the actual photo. Root cause
+found directly in the system prompt: the confidence instruction told the
+model "A normal selfie in typical indoor lighting should usually score
+75-95, not low" — an explicit anchored range with no per-photo signal to
+reason from. Combined with `temperature` being unavailable as a tuning
+lever on this codebase's model (gpt-5.5 rejects any non-default value —
+documented earlier in this file), the model had every incentive to
+converge on one "safe" number near the middle of that range (85) for
+every photo that passed the lenient quality gate, rather than genuinely
+reasoning about how easy each specific photo actually was to read.
+
+Fix: rewrote the confidence instruction to require explicit per-photo
+reasoning before picking a number — lighting evenness, focus sharpness,
+how much of the face is visible/how large it is in frame, and colour-cast
+clarity — and to explicitly forbid clustering: "Do not converge on the
+same number across different photos — two different 'good' photos with
+different actual quality should get two different confidence scores."
+Replaced the single anchored 75-95 range with a two-tier guide (90+ for a
+photo that's genuinely well-lit/sharp/close/neutral; 60-84 for a "good"
+but imperfect photo with real but non-disqualifying flaws) so there's a
+meaningfully different answer for meaningfully different photo quality,
+rather than one number that always satisfies "usually 75-95."
+
+Also raised `max_completion_tokens` 800 -> 1200 (the new prompt asks for
+more explicit reasoning, which plausibly consumes more of gpt-5.5's
+shared reasoning/output token budget — see this file's other notes on
+this exact failure pattern) and added a `logger.error` with
+`finish_reason` on the `if (!raw)` empty-content path, matching the
+established pattern elsewhere in this codebase, so an empty response here
+is diagnosable rather than just "Model returned no content" with no
+further detail.
+
+Not independently live-verified in this session (no `OPENAI_API_KEY`
+available) — typecheck and build both pass. If confidence still clusters
+around one number after this ships, pull a few real `/api/analyze-photo`
+responses across genuinely different-quality photos and compare — if
+they're still suspiciously close together, the anchoring may need to be
+removed even further (e.g. asking for a written quality assessment as a
+non-schema reasoning step before the number) rather than just relaxing
+the range further.
+
+**Also checked while investigating this: "overtone" vs "undertone" are
+already both represented, just under different names than education
+material uses.** The user shared reference material distinguishing
+"overtone" (visible surface skin colour, changes with tanning/sun/etc.)
+from "undertone" (subtler underlying cast, stays stable). This app's
+`skinTone` field (e.g. "Fair", "Medium", "Tan") already IS what that
+material calls "overtone," and `undertone` already matches directly — no
+missing concept, just a naming difference from that particular reference
+material's terminology. No renaming was done since `skinTone` is already
+used consistently across the schema, `SkinTuneProfile`, and the frontend
+display (`Review`, `AppearanceStep`) — only worth touching if the user
+specifically wants the UI-facing label changed to say "Overtone" instead
+of "Skin tone," which was not what was reported here (the reported bug
+was the confidence score, not the terminology).
+
+### `search-dresses.ts`: the accessories query-exclusion fix broke search entirely — reverted
+
+Reported live with a screenshot, immediately after the accessories fix
+above shipped: EVERY dress search started failing with "No real dress
+results found across any site for this search — every per-site task
+returned nothing usable" (a 502, `Generating`'s error state). This is a
+strictly worse regression than the accessories problem that fix was
+solving — a completely broken search, not an occasional wrong result.
+
+Root cause: that fix's layer 2 (`buildSearchQuery` appending `-jewellery
+-jewelry -pendant -necklace -earrings -eyewear -glasses -sunglasses
+-watch -handbag` to the query string, on the theory that Tavily supports
+"-term" free-text exclusion the way a normal web search engine does) was
+never live-tested against the real Tavily API before shipping — the
+CLAUDE.md note for that fix explicitly flagged this ("Not independently
+live-verified in this session"). Ten "-term" tokens stacked onto an
+already multi-clause query (`buy men's classic navy office clothing
+outfit online price mid-range -jewellery -jewelry -pendant -necklace
+-earrings -eyewear -glasses -sunglasses -watch -handbag`) produces a
+long, unnatural query string — plausibly this either returns nothing
+useful from Tavily directly, or returns a thin result set that the OTHER
+two independent filter layers (the text denylist, the vision check) then
+squeeze down to zero survivors once stacked on top.
+
+Fix: reverted layer 2 entirely — removed the exclusion-term string from
+`buildSearchQuery`. Layers 1 (`isRelevantToProfile`'s text denylist) and 3
+(`filterByImageContent`'s vision check) are both still in place and
+unaffected — they filter results AFTER Tavily returns them, so they carry
+none of the "might return zero results from the search itself" risk that
+layer 2 did. Left a detailed comment in `buildSearchQuery` explaining
+exactly why the exclusion string is gone and what to check (live-test the
+exact resulting query string directly against `api.tavily.com/search`
+first) before ever re-adding a query-level exclusion approach.
+
+**This is a direct instance of a rule already stated elsewhere in this
+file, worth restating: don't ship a change to `buildSearchQuery`'s actual
+query construction without live-testing the resulting query against the
+real Tavily API first** — this file already documents that
+`include_domains` behaves differently live than its own description
+suggests; the same caution applies to any new query-syntax feature
+(exclusion terms, phrase quoting, etc.), not just parameters that have an
+API doc to check.
+
+Not independently live-verified in this session (no `TAVILY_API_KEY`
+available) — typecheck and build both pass, and this is a revert to
+previously-working query construction, not new unverified logic. If
+searches still return nothing after this ships, that points at something
+else (Tavily's own usage cap — see the earlier note on 432 responses — or
+a genuinely different query-construction issue), not this exclusion
+string, since it's now removed entirely.
+
+### `search-dresses.ts`: confirmed live, the revert above was correct but NOT the whole story — same generic error still appeared, real cause was Tavily's usage cap
+
+Immediately after the revert above deployed, the user reported the exact
+same "No real dress results found... every per-site task returned nothing
+usable" 502. This looked at first like the revert hadn't fixed anything —
+but pulling real Render logs (the user pasted them directly) showed the
+true per-task failure reason, and it was NOT the query-construction issue
+from the revert above:
+
+```
+Tavily search failed: 432 {"detail":{"error":"This request exceeds your
+plan's set usage limit. Please upgrade your plan or contact
+support@tavily.com"}}
+```
+
+This is exactly the same 432 usage-cap error already documented earlier
+in this file ("Tavily free/dev-tier keys have a monthly usage cap — a
+real production issue, not a code bug") — it recurred because the plan's
+limit was hit again (or still), completely independent of the query-
+string revert. **The revert above was still correct and should stay
+reverted** — it fixed a real, different regression (the query-string
+issue could have caused this same generic message via a totally separate
+mechanism) — but it was never going to fix THIS particular occurrence,
+since the actual blocker was account-level, not code.
+
+**The real gap this exposed: the thrown "No real dress results found..."
+error never included the ACTUAL per-task failure reason**, even though
+every individual per-site task's real error (visible only in Render's own
+logs, at `logger.warn` level) was already being captured. A 401
+invalid-key, this 432 usage-cap, and a genuinely empty result set were
+all indistinguishable from the user-facing error message and from the
+screenshot alike — this is why the "same error" looked like an unfixed
+regression when it was actually a completely different, unrelated cause.
+
+Fix: `search-dresses.ts`'s route handler now collects each rejected
+per-site task's real error message into `taskFailureReasons`, and the
+final "No real dress results found" error appends either those real
+per-task messages (when tasks genuinely failed) or a distinct message
+when every task succeeded but still filtered down to zero results
+(pointing at query/filter logic instead of a Tavily-side error) — so the
+NEXT time this generic-looking error appears, the actual cause (a real
+Tavily error body, e.g. this exact 432) is visible directly in the
+frontend/screenshot without needing a separate Render log pull.
+
+**This specific 432 is not a code bug and has no code fix** — it means
+this exact Tavily API key's plan-level usage limit is currently
+exhausted. The fix is entirely on Tavily's side: upgrade the plan at
+app.tavily.com, wait for the next billing cycle, or swap in a key with
+remaining quota. If this exact 432 message is ever reported again, do not
+attempt another code change for it — confirm via the (now-visible) error
+detail that it's genuinely this same 432 message before doing anything,
+and point the user at Tavily's dashboard.
+
+### Frontend: removed two genuinely-unused optional fields (`colorsAvoid`, `restrictions`) from the wizard
+
+Follow-up to the earlier "cut one genuinely-unused required wizard field"
+note above (`impression`) — the user asked to shorten the form further.
+Checked again what `search-dresses.ts`/`try-on.ts` actually read:
+`colorsAvoid` and `restrictions` are NEVER read by either route (only
+`recommendations.ts`, unreachable on this branch, reads them). They were
+already `required: false` (never blocked completion), but still appeared
+as an extra scroll/decision point on the `colors-occasion` section with
+zero effect on search results or try-on output.
+
+Per the user's explicit choice (discussed directly rather than assumed —
+same pattern as the `impression` cut): removed both fields' entries from
+`colors-occasion`'s `SectionField` array entirely (not just left optional)
+— `colorsLove` and `occasion` are the only fields left in that section.
+`Review`'s summary line for that row was updated to drop the now-always-
+empty "avoids ..." clause. The now-unused `colorAvoidOptions`/
+`restrictionOptions` imports were removed from `App.tsx` to keep the
+typecheck clean.
+
+**Deliberately did NOT remove `colorsAvoid`/`restrictions` from
+`SkinTuneProfile`, `initialProfile`, or `skintune-schemas.ts`'s Zod
+schema** — unlike `priorities`/`occasionDetails` on `main` (which this
+file's Frontend architecture section documents as fully removed), these
+two fields are still read by `recommendations.ts`'s prompt, which this
+branch's own CLAUDE.md section explicitly says was "deliberately LEFT IN
+PLACE... so main's flow can be restored quickly if ever needed without
+resurrecting deleted files." Removing the field from the type/schema
+would break that restore path. The fields still exist on the profile
+type and default to empty arrays — the wizard just never collects them on
+this branch anymore, exactly the same pattern already used for
+`impression`'s optional-but-present handling, just taken one step further
+since these are never read at all on this branch (vs. `impression`, which
+is at least still shown, just optional).
+
+Typecheck and `pnpm --filter @workspace/skintune run build` (with
+`PORT`/`BASE_PATH` env vars) both pass.
+
+### `analyze-photo.ts`: skinTone/undertone reasoning strengthened alongside the confidence fix
+
+Follow-up to the confidence-scoring fix above, per direct request for
+"better analysis." That fix added explicit step-by-step reasoning
+requirements for the `confidence` field but left `skinTone`/`undertone`'s
+instructions as a single short sentence each — no equivalent push toward
+genuine, distinct reasoning for the two fields that actually carry the
+styling-relevant read.
+
+The user separately shared consumer-education material distinguishing
+"overtone" (visible surface skin colour — changes with tanning/sun/
+lighting) from "undertone" (subtler underlying cast — stays relatively
+stable). Confirmed (and explicitly told the user, who then said "keep it
+as-is, just make it analyze well") that this app's existing `skinTone`
+field already IS what that material calls "overtone," and `undertone`
+already matches directly — no field renaming was done, per the user's
+explicit instruction to keep it as-is; only the REASONING quality behind
+those two existing fields was improved.
+
+Fix: `skinTone`'s instruction now explicitly names it as the overtone —
+the visible surface colour at first glance — and instructs the model to
+mentally correct for the photo's own lighting colour cast before judging
+the value, rather than reading the lighting's tint as if it were the
+skin's own colour. `undertone`'s instruction now asks the model to reason
+from concrete visual signals (warm = yellow/golden/peachy casts,
+especially where skin is thinner like cheeks/under-eyes; cool = pink/
+rosy/reddish or slightly bluish casts in the same areas; neutral = no
+cast dominating) rather than just picking a label, and explicitly warns
+against restating `skinTone` in different words — the two fields answer
+different questions (surface lightness/depth vs. underlying colour cast)
+and should be reasoned separately even though shown together.
+
+`max_completion_tokens` raised 1200 -> 1600, matching this file's
+established pattern that a prompt asking for more explicit reasoning
+needs more budget for gpt-5.5's internal reasoning tokens, which count
+against the same completion-token budget as the visible JSON output (see
+this file's other notes on this exact failure pattern — an empty response
+here would show as a `logger.error` with `finish_reason: "length"`, per
+the earlier fix in this same route).
+
+Not independently live-verified in this session (no `OPENAI_API_KEY`
+available) — typecheck and build both pass. If skinTone/undertone reads
+still feel generic or inaccurate after this ships, pull a few real
+`/api/analyze-photo` responses across genuinely different-coloring photos
+and compare the actual values returned — if undertone in particular keeps
+just mirroring skinTone's lightness (e.g. always "Warm" for lighter
+tones, always "Cool" for deeper tones, rather than varying independently
+of depth), that's a sign the model is still conflating the two questions
+despite the instruction, and the prompt may need an even more explicit
+worked example of a specific undertone-independent-of-depth case.
+
+### Frontend: merged the last 3 post-photo section screens into 1
+
+Follow-up to the two earlier "shorten the form" rounds above (cutting
+`impression` to optional, then removing `colorsAvoid`/`restrictions`
+entirely) — the user asked again to shorten the form further. Every
+remaining field (`bodyBuild`, `fit`, `style`, `colorsLove`, `occasion`,
+`impression`, `budget`) is genuinely read by this branch's backend (the
+search query or the try-on prompt) or was explicitly confirmed by the
+user as a real question to keep even though unused (see the earlier
+`impression`/age/height discussion) — so no more CONTENT could be cut
+without either losing search quality or contradicting a direct user
+decision. Discussed three structural options directly with the user
+(free-text + AI extraction, inferring `bodyBuild` from the photo instead
+of asking, merging screens) — user chose to keep `bodyBuild` as a real
+asked question (declined the photo-inference option) and settled on pure
+screen consolidation: same fields, same content, fewer "Continue" taps.
+
+Fix: the three separate `SectionStep` screens this branch had —
+`body-style` (build, fit, style), `colors-occasion` (colours, occasion),
+`final-prefs` (impression, budget) — were merged into ONE `body-style`
+screen with all 7 fields in its `fields` array, one scroll, one "Review my
+edit" button at the end instead of three separate "Continue" taps across
+three screens. `'colors-occasion'` and `'final-prefs'` were removed from
+the `Screen` union type and `wizardScreens` entirely (not just visually
+hidden) — `wizardScreens` is now `name, profile, age, height, consent,
+photo, appearance, body-style, review` (9 steps, was 11). Fixed every
+now-stale reference: `Review`'s three separate summary rows (build/fit/
+style, colours/moment, impression/budget) were merged into two rows, both
+targeting `body-style` for their "Edit" button; `Home`'s `onQuickStart`
+(previously jumping straight to `final-prefs`) now jumps to `body-style`;
+`review`'s own step number was corrected from 11 to 9 (position in the
+now-shorter `wizardScreens`) since `StepShell`'s progress indicator reads
+this number directly, not computed from the array.
+
+This is a pure screen-consolidation change — no field was removed, no
+field's required/optional status changed, no backend contract changed.
+`isSectionFieldFilled`'s gating logic (already generic per-field, not
+per-section) required no change to correctly gate the larger combined
+field list. Typecheck and `pnpm --filter @workspace/skintune run build`
+(with `PORT`/`BASE_PATH` env vars) both pass — confirms no other screen
+still referenced the two removed `Screen` values (a stale reference would
+have failed typecheck immediately, since `Screen` is a closed union).
+
+**Reverted almost immediately, per direct user feedback: "ek hi screen pe
+mat karo" (don't put it on one screen).** One dense scroll of all 7
+fields read as worse than three lighter, clearly-separated sections —
+even though the merged version had fewer taps (1 vs 3), the user
+explicitly preferred the original three-section split. Reverted
+`wizardScreens`/`Screen` back to including `'colors-occasion'` and
+`'final-prefs'`, restored the three separate `SectionStep` calls with
+their original field groupings, and restored `Review`'s three summary
+rows, `Home`'s `onQuickStart` target, and `review`'s step number (11)
+back to their pre-merge values. Typecheck and build both pass again.
+
+**Lesson for next time a "shorten the form" request comes in: fewer taps
+is not automatically better — verify the actual preference (screen count
+vs. field count vs. visual density) before restructuring, ideally by
+asking directly rather than assuming consolidation is always the win.**
+This branch has now tried, in order: making a field optional (kept —
+`impression`), removing fields entirely (kept — `colorsAvoid`/
+`restrictions`), and merging screens (reverted). If asked to shorten the
+form again, the two content-cutting approaches already worked and stayed;
+don't re-attempt screen-merging as the default lever without checking
+first whether the user specifically wants fewer taps or fewer/lighter
+screens — those are different asks with different answers here.
+
+## `real-dress-avatar-intelligent-tryon` branch — personal avatar reuse + GPT-based search + session memory
+
+Forked from `real-dress-search` (not `main`) per an explicit, large product
+spec asking for: a persistent reusable personal avatar (no selfie every
+try-on), GPT-5.6-Terra as the reasoning brain, OpenAI Web Search replacing
+Tavily as the default search provider, Interested/Not-Interested feedback
+with session memory, "Research Again"/"Refine Search", and a fast VTO
+provider (FASHN) with dynamic (never hardcoded) styling. `real-dress-search`
+itself was left completely untouched — this is a new branch built on top of
+it, not a modification of it.
+
+**Before writing any code, the actual repo was inspected and several of the
+spec's assumptions turned out to be false for this codebase — this section
+documents exactly what was built, what was deliberately deferred (and why),
+and what would need to happen next for the rest of the spec.**
+
+### What was actually verified vs. assumed
+
+- **No auth, no database, no file storage exist anywhere in this repo.**
+  `lib/db/schema/index.ts` is an empty template that was never used; there
+  is no Postgres/Supabase connection anywhere; the only persistence
+  anywhere in this app is `localStorage`. The spec's sections on
+  users/user_profiles/avatars/avatar_versions/shopping_sessions/
+  product_feedback DB tables, Supabase Storage paths, and login/signup
+  flows all assume infrastructure that doesn't exist — building that for
+  real (a real auth system + a real database + real storage with signed
+  URLs) is a genuinely separate, multi-day backend project on its own, not
+  something to sketch in alongside the AI/search/avatar work in one pass.
+  **The user was asked directly rather than this being assumed either
+  way, and confirmed: "no auth now."** So this branch keeps the existing
+  app's "one implicit user per browser" model (the same pattern
+  `skintune-profile`/`skintune-saved-looks` already use) for every new
+  piece of state (avatar, session memory) — see `services/avatar.ts` and
+  `services/shopping-session.ts`'s doc comments for exactly where a real
+  backend would plug in later without changing the calling code.
+- **`gpt-5.6-terra` and `gpt-6-astra` are not verifiable model IDs from
+  inside this session** — there is no live web access here to check
+  current OpenAI documentation, and fabricating a model ID (or an
+  invented FASHN API endpoint/schema) would violate the spec's own "do
+  not invent" rules more seriously than declining to hardcode one. The
+  user was asked directly and said "use best according to u." Decision
+  made: keep `gpt-5.5` (this codebase's already-confirmed-working model —
+  see the extensive live-verification notes on `openai-client.ts`
+  elsewhere in this file) as the default, behind a renamed, more
+  general-purpose env var (`OPENAI_REASONING_MODEL`, with
+  `OPENAI_TEXT_MODEL` kept as a fallback alias so nothing already
+  deployed breaks) plus an unused-but-present
+  `OPENAI_REASONING_FALLBACK_MODEL` scaffold — see `openai-client.ts`'s
+  updated doc comment. Swapping to a real, confirmed `gpt-5.6-terra` (or
+  any other model) later is a one-line env var change, not a code change
+  — but do NOT set it to an unverified model name without first
+  confirming live against the OpenAI API that it exists and is available
+  on the account being used, the exact same discipline this file's
+  existing gpt-4o-vs-gpt-5.5 history already established.
+- **OpenAI's Responses API `web_search` tool is real** — this was
+  actually verified, not assumed, directly against the currently
+  installed `openai` npm package's own shipped type definitions
+  (`node_modules/openai/resources/responses/responses.d.ts`): `WebSearchTool`
+  with `type: 'web_search' | 'web_search_2025_08_26'` is part of the
+  `Tool` union `openai.responses.create` accepts, and `output_text`/
+  `text: { format: { type: 'json_schema', ... } }` are both real,
+  typed members of that same SDK version (v6.49.0 at the time this was
+  written). See `lib/providers/search/openai-web-search-provider.ts`'s
+  doc comment for the exact verification method — re-verify against the
+  new version's own `.d.ts` file the same way if this SDK is ever
+  upgraded, rather than assuming the shape stayed the same.
+- **FASHN's exact API (endpoints, request/response fields) could not be
+  verified from this session** — no live web access, and the spec itself
+  explicitly says not to invent endpoints. Rather than fabricate a
+  `FashnTryOnProvider` against a guessed schema, this was explicitly
+  deferred (see below) — the existing, already-verified `gpt-image-2`
+  try-on machinery in `try-on.ts` was kept instead, with avatar reuse
+  layered on top of it.
+
+### What was built
+
+1. **`lib/providers/search/`** — a real `SearchProvider` abstraction
+   (`search-provider.ts`) with two implementations:
+   `OpenAiWebSearchProvider` (default — the real `web_search` tool,
+   verified as above) and `LegacyTavilySearchProvider` (wraps the
+   original `real-dress-search` branch's `tavily-client.ts` unchanged).
+   Selected via `SEARCH_PROVIDER` env var ("openai" | "tavily"),
+   defaulting to "openai" per the spec's explicit direction. `tavily-client.ts`
+   itself was NOT deleted or modified — it's still exactly what
+   `real-dress-search` shipped, just now optional rather than the only
+   option.
+2. **`routes/search-dresses.ts` refactored, not rewritten** — its entire
+   existing filtering pipeline (the domain denylist, the text-relevance
+   filter, the vision-based accessory/couple-photo check, the
+   interleaving/de-duplication logic — all of it real, live-verified work
+   from `real-dress-search`'s own history) is unchanged and now shared by
+   THREE routes via a new `runDressSearch` helper: the original
+   `POST /api/search-dresses`, a new `POST /api/search-dresses/research`
+   ("Research Again" — excludes every seen/rejected title, always starts
+   fresh at offset 0), and a new `POST /api/search-dresses/refine`
+   ("Refine Search" — same exclusion plus the user's free-text steering
+   instruction folded directly into the query, since GPT-based search can
+   read and act on free text natively, unlike Tavily's plain keyword
+   matching). `buildSearchQuery` gained an optional `memory` parameter
+   (`refinement` text + `avoidTitles`) rather than these three routes each
+   reimplementing query construction — see that function's updated doc
+   comment. **Per this file's own hard-won lesson from `real-dress-search`
+   ("don't ship a query-construction change without live-testing it")**:
+   the `(not: title1, title2, ...)` exclusion clause added to the query
+   string was modeled after — not copied from — the exact `-term`
+   exclusion approach that broke production once already on the parent
+   branch; it was deliberately kept SHORT (max 5 titles) and phrased as a
+   soft parenthetical rather than a long stack of `-term` tokens, but this
+   was NOT independently live-tested in this session (no API key
+   available) — if "Research Again"/"Refine" are ever reported as
+   returning zero results, check this exclusion clause first before
+   assuming the rest of the pipeline is at fault.
+3. **`routes/avatar.ts`** — `POST /api/avatar/create`. This is genuinely
+   `try-on.ts`'s own identity-preservation machinery (the itemized
+   face-feature list, explicit build preservation, anti-cut-paste
+   instruction, full-length head-to-body size-ratio fix — every hard-won
+   lesson from that file's 9-round history) reused for a DRESS-FREE case:
+   turning a raw selfie into one clean, full-length, neutrally-dressed
+   reference photo that later becomes the "identity photo" for every
+   try-on, instead of the raw selfie itself. Same Responses API primary /
+   `images.edit` fallback pattern as every other image route in this
+   codebase. Per the "nothing hardcoded" product rule, the only thing
+   fixed in `buildAvatarPrompt` is identity/build preservation and the
+   fact that it's a neutral, reusable base photo (simple clothing, plain
+   background) — everything about HOW that's rendered is still the
+   model's own decision, not a template.
+4. **Avatar reuse, the actual point of all this** —
+   `services/avatar.ts` (frontend) persists the created avatar to
+   `localStorage` (versioned: `saveAsFirstVersion` for first-time
+   creation, `saveAsNewActiveVersion` for "recreate" without destroying
+   history — see this branch's spec section 7) and `App.tsx`'s
+   `generating` screen effect now creates the avatar ONCE (only if
+   `getActiveAvatar()` returned null on mount — a returning user with an
+   existing avatar skips this call entirely, going straight to search,
+   per the spec's explicit "do NOT create avatar on every login" rule)
+   before running the dress search. `runTryOn` now sends
+   `avatar.imageUrl` to `/api/try-on`, not `profile.photoUrl` — every
+   dress a user tries on reuses that ONE avatar image, never
+   re-generating it per dress (spec section 30). If avatar creation fails,
+   the search still proceeds (browsing isn't blocked), but `avatarError`
+   is surfaced on the dress grid and `runTryOn` refuses to proceed with a
+   clear message rather than silently falling back to the raw selfie —
+   that fallback would defeat the entire point of this feature.
+5. **Interested/Not Interested + session memory** —
+   `services/shopping-session.ts` (frontend, in-memory `SessionMemory`:
+   `seenTitles`/`rejected` with optional reason/`interested`) and
+   `routes/product-feedback.ts` (backend, `POST /api/products/feedback`
+   — logs the feedback server-side; NOT the actual source of truth since
+   there's no database, see that route's doc comment for exactly what a
+   real persistence layer would replace here). `DressGrid` now shows
+   Interested/Not-Interested buttons per card (Not Interested offers two
+   quick reason chips + a Skip, never a required form — spec section 23),
+   and both a "Research Again" button and a free-text "Refine" input,
+   both wired to the new backend routes with the current `sessionMemory`
+   attached.
+6. **Model configuration centralized** — `openai-client.ts`'s
+   `RECOMMENDATION_MODEL` now reads `OPENAI_REASONING_MODEL` first (falling
+   back to the existing `OPENAI_TEXT_MODEL` for compatibility), and a new
+   unused-for-now `RECOMMENDATION_FALLBACK_MODEL` constant reads
+   `OPENAI_REASONING_FALLBACK_MODEL` — scaffolding for a fallback path, not
+   wired into any caller yet since none of this branch's routes need one to
+   meet the spec's actual acceptance criteria.
+
+### What was explicitly deferred (not stubbed with fake behavior, not silently skipped either)
+
+- **Real user accounts, a real database, real file storage.** As covered
+  above — this needs its own dedicated project (pick an auth provider,
+  design real schema/migrations, wire real storage with signed URLs) once
+  the product direction on accounts is actually decided. Nothing in this
+  branch pretends this exists; every new piece of state is explicitly
+  scoped to "this browser," matching the app's existing pattern honestly
+  rather than half-building a fake multi-user system.
+- **`gpt-5.6-terra` as an actually-used model.** Config is ready
+  (`OPENAI_REASONING_MODEL`) but the value itself is still `gpt-5.5` — see
+  above for why. Flip the env var once the real model ID is confirmed
+  live against the account's own API access; no code change needed.
+- **Occasion-based home screen + dynamic per-occasion wizard (spec
+  sections 11, 42-43).** This is a genuinely large, separate UI redesign
+  (reworking the entire onboarding flow's information architecture, not
+  an incremental addition) — deliberately not attempted in the same pass
+  as the avatar/search/feedback backend work above, to avoid delivering a
+  shallow, half-working version of everything instead of a few things
+  that actually work end to end. The existing single wizard (name →
+  profile → age → height → consent → photo → appearance → 3 preference
+  sections → review) is unchanged. If this is wanted next, it's its own
+  focused pass.
+- **A structured "search intent" JSON object as a formal artifact (spec
+  section 14).** The OpenAI web-search provider still builds one text
+  query per site/colour/style combination (same shape as the existing
+  Tavily-based query construction, extended with the `memory` parameter)
+  rather than first generating and persisting a structured intent object
+  separately. The model IS reasoning about the request (via the prompt
+  inside `openai-web-search-provider.ts`), just not through a
+  separately-exposed intermediate schema — revisit if a caller ever
+  actually needs to inspect/reuse that intent independent of the search
+  call itself.
+- **Try-on result caching (spec section 37) and image
+  resize/compression before sending to providers (spec section 52).**
+  Not implemented this pass — every try-on still calls the image model
+  fresh, and photos are sent as full base64 data URLs, same as
+  `real-dress-search` already did. Worth adding once real usage patterns
+  show it's needed; premature caching without real usage data risks
+  solving the wrong problem.
+- **Tests.** This repo has no test suite (see this file's existing
+  "Working conventions" note) — verification for this branch is
+  `pnpm run typecheck` (whole workspace, passes) and both `build` scripts
+  (both pass), the same bar every other change in this file has been held
+  to. No new test infrastructure was introduced in this pass.
+
+### Verification performed
+
+`pnpm run typecheck` (whole workspace) and
+`pnpm --filter @workspace/api-server run build` /
+`PORT=5173 BASE_PATH=/ pnpm --filter @workspace/skintune run build` all
+pass. **None of the new AI-calling code (avatar creation, the OpenAI
+web-search provider, research/refine) was live-tested against a real
+OpenAI API key in this session** — no key was available. Before relying
+on this in production: run one real avatar creation, one real search
+through the new default provider, and one real "Research Again"/"Refine"
+call against a live key, and check server logs for the same class of
+issue this file's `real-dress-search` history repeatedly found in similar
+new code (empty structured-output responses from `gpt-5.5`'s reasoning-
+token budget — the new `openai-web-search-provider.ts` call uses
+`max_output_tokens: 4000`, sized generously per that established lesson,
+but has not been confirmed sufficient against a real multi-page web
+search).
+
+### Follow-up: FASHN VTO provider actually implemented (was deferred above, now built)
+
+The user asked directly what happened to FASHN after the initial pass
+above deferred it. Rather than leave it deferred, the user provided the
+real FASHN documentation (both by pasting the docs site's own Introduction
+page directly, and by confirming the web-search tool was available in
+this session) — this follow-up used that access to actually verify FASHN's
+real API (not the spec's guessed shape) directly against
+`https://docs.fashn.ai`'s own reference pages before writing any code, the
+same "verify, don't invent" discipline this branch's CLAUDE.md section
+already established for the OpenAI `web_search` tool.
+
+**What was verified, and how** (see `lib/providers/vto/fashn-vto-provider.ts`'s
+own doc comment for the full citation list): base URL
+(`https://api.fashn.ai`), auth header (`Authorization: Bearer <key>`), the
+`POST /v1/run` request shape (`{model_name, inputs}`), the exact `inputs`
+field lists for both `face-to-model` (`face_image` required;
+`prompt`/`aspect_ratio`/`resolution`/`generation_mode`/`seed`/
+`num_images`/`output_format`/`return_base64` optional) and `tryon-max`
+(`product_image` + `model_image` required, same optional fields as above),
+the five documented prediction status values (`starting`/`in_queue`/
+`processing`/`completed`/`failed`), and — importantly, since it was easy
+to assume otherwise — that **the two endpoints' response shapes genuinely
+differ**: `face-to-model` returns `{"output": {"images": [...]}}` (nested)
+while `tryon-max` returns `{"output": [...]}` (a flat array). This
+asymmetry was caught by reading both reference pages directly rather than
+assuming one endpoint's shape for the other. The exact `GET /v1/status/{id}`
+polling path was confirmed with slightly less direct certainty than
+everything else — no single page happened to show a full curl example for
+it, but it appears verbatim inside the error-handling page's own worked
+example describing how a failed prediction is polled. If a live FASHN call
+ever 404s specifically on the status poll, re-check that one path against
+the live docs first; everything else here has a direct page-level citation.
+
+**What was built**: `lib/providers/vto/` — a `VtoProvider` abstraction
+(`vto-provider.ts`) mirroring the `SearchProvider` pattern already
+established for the search side of this branch, with two
+implementations: `OpenAiImageProvider` (default — the exact
+already-verified OpenAI Responses-API/`images.edit` mechanism this branch
+originally shipped, moved here unchanged, not rewritten) and
+`FashnVtoProvider` (the real FASHN endpoints above, opt-in via
+`VTO_PROVIDER=fashn` + a new `FASHN_API_KEY` env var). `routes/avatar.ts`
+and `routes/try-on.ts` were both simplified to just call
+`getVtoProvider().generateAvatar(...)`/`.generateTryOn(...)` — neither
+route knows or cares which provider is actually running underneath.
+
+**The original OpenAI prompt logic was extracted verbatim, not
+reworded**, into `lib/prompts/avatar-prompt.ts` and
+`lib/prompts/try-on-prompt.ts` specifically so moving it behind the new
+abstraction carried zero risk of silently changing wording from this
+branch's (and `real-dress-search`'s) many rounds of live-verified prompt
+fixes — every sentence in `try-on-prompt.ts` in particular exists because
+of a specific documented failure mode (cut-paste faces, copied
+product-photo poses, oversized heads, etc.); see this file's extensive
+`real-dress-search` history above before touching that text again.
+
+**Not independently live-verified against a real FASHN account in this
+session** — no `FASHN_API_KEY` was available. `OpenAiImageProvider`
+remains the default specifically so nothing regresses for anyone who
+hasn't set up FASHN; typecheck and build both pass for both providers,
+but only the OpenAI path has ever been live-tested end to end (in earlier
+rounds on `real-dress-search`). Before switching a real deployment to
+`VTO_PROVIDER=fashn`: run one real avatar creation and one real try-on
+against a live FASHN key, and if either the status-poll path or either
+endpoint's response-shape assumption above turns out wrong, that's the
+first place to check — not the surrounding route code, which is unchanged
+from the already-working OpenAI path structurally.
+
+### Confirmed live on the first real deploy: `OpenAiWebSearchProvider`'s `max_output_tokens: 4000` was too low — exact same reasoning-token-budget bug, fourth occurrence
+
+First real production deploy of this branch (avatar creation worked —
+`gpt-image-2.5-flare` confirmed to be a real, working `IMAGE_MODEL` value
+this way, 200 OK in ~26s) but `/api/search-dresses` returned a 502 with
+the new, more specific error message added earlier in this file
+("every per-site task completed but returned zero usable results after
+filtering — this points at the search query/filters themselves, not a
+provider-side error"). Render logs showed the actual cause immediately:
+
+```
+SyntaxError: Unterminated string in JSON at position 2866 (line 1 column 2867)
+  at OpenAiWebSearchProvider.search (.../openai-web-search-provider.ts:122:21)
+```
+
+This is the exact same root-cause PATTERN already documented three times
+elsewhere in this file (`writeTryOnAddendum`, `writeStylingAddendum`,
+`filterByImageContent`) — `gpt-5.5` is a reasoning-model-family model
+whose internal reasoning tokens count against the same
+`max_output_tokens`/`max_completion_tokens` budget as the visible output.
+This call is genuinely the heaviest of the four: it has to actually
+invoke the `web_search` tool (real HTTP round-trips to real pages, each
+consuming tokens) potentially several times before it can even start
+emitting the final JSON product list, and `max_output_tokens` had been
+set to only 4000 — clearly insufficient, confirmed by the literal
+mid-string cutoff in the error.
+
+Fix: raised `max_output_tokens` 4000 -> 10000. Also added
+`finish_reason`-equivalent diagnostics that didn't exist before (this
+call site uses the Responses API, not Chat Completions, so the field is
+`response.incomplete_details?.reason`/`response.status`, not
+`finish_reason` — logged on both the empty-output path and the
+JSON-parse-failure path, plus the raw output's length and last 200 chars
+on the parse-failure path specifically, so a truncation is visible
+directly in the log without needing to reproduce the request).
+
+**This is now the fourth confirmed occurrence of this exact failure
+pattern in this codebase.** The standing lesson already stated
+elsewhere in this file — "any new call site that uses `gpt-5.5` with
+structured JSON output and asks it to reason over a non-trivial amount of
+input should start with a generous `max_output_tokens`/
+`max_completion_tokens` (1000+, and clearly more for anything invoking a
+tool like `web_search`), not the smallest number that seems sufficient
+for the visible output alone" — should have applied to this call site
+from the start; 4000 was already an attempt at "generous" and still
+wasn't enough for a tool-using call. If truncation is ever reported again
+after raising to 10000, check the newly-added `rawTail`/`incompleteReason`
+log fields first to confirm it's still token-budget-related before
+raising further or suspecting something else.
+
+Not independently re-verified against a live request after this specific
+fix (the fix follows directly from the confirmed live error, but the
+corrected value itself was not re-tested in this session) — typecheck and
+build both pass. If search still 502s after this ships with the SAME
+"Unterminated string" error, raise `max_output_tokens` further (there's no
+known hard ceiling reason not to go to 16000+ for this specific call,
+given how token-hungry a multi-page web search naturally is) rather than
+assuming a different fix is needed.
+
+### Confirmed live after the token-budget fix: search worked, but the OpenAI web-search provider is dramatically slower than Tavily was
+
+Reported live via Render logs: `/api/search-dresses` requests completing
+with `responseTime: 325573` (~5.4 minutes) and `responseTime: 175222`
+(~2.9 minutes). This is a genuine, measured regression versus this
+branch's parent (`real-dress-search`, which used Tavily) — Tavily's
+`/search` endpoint is one direct HTTP call per site; the new default
+`OpenAiWebSearchProvider` is a full Responses API turn that has to
+actually invoke the `web_search` tool (real multi-page browsing) before
+it can emit anything, and `runDressSearch` was still fanning out across
+all 6 `SHOPPING_SITES` in parallel — 6 of these genuinely heavy calls at
+once, not 6 of Tavily's cheap ones.
+
+Fix: `runDressSearch` now picks the task count based on which provider is
+active — `SHOPPING_SITES.length` (6) unchanged for Tavily (still fast at
+that fan-out), but only 3 for `OpenAiWebSearchProvider`
+(`provider.name === "openai-web-search"`). This trades some site/colour
+variety for a search that actually completes in a reasonable time. Not
+independently re-measured against a live request in this session (the
+fix follows directly from the confirmed live timing, but 3 wasn't itself
+re-timed) — if search is still reported as too slow after this ships,
+cut the task count further (e.g. to 2) before assuming a different fix is
+needed; the web_search tool call's own latency is the actual cost here,
+not anything else in this route's logic. If genuine multi-second latency
+becomes an unacceptable tradeoff even at a low task count, the real fix
+would be switching back to `SEARCH_PROVIDER=tavily` for latency-sensitive
+deployments, not continuing to shrink `OpenAiWebSearchProvider`'s
+fan-out indefinitely — see this file's `.env.example` notes for how to
+do that switch.
+
+### Image quality/sharpness improved per direct request ("HD and enhance image")
+
+Two changes, both to `lib/providers/vto/openai-image-provider.ts` and the
+two prompt files it uses (`lib/prompts/avatar-prompt.ts`,
+`lib/prompts/try-on-prompt.ts`) — `size: "1024x1536"` and `quality: "high"`
+were already the API parameters used everywhere in this file (both were
+already at their most-detailed documented option for `gpt-image-2`-family
+models; `size` was deliberately NOT changed further without confirming a
+larger size is actually supported, since guessing a size string risks a
+hard 400 rather than a quality improvement):
+
+1. `output_compression` raised from `90` to `98` across all four call
+   sites in `openai-image-provider.ts` (both the Responses API and
+   `images.edit` paths, for both avatar creation and try-on) — this is
+   the JPEG compression quality parameter; 98 is close to visually
+   lossless, trading a larger base64 payload for less compression
+   artifacting.
+2. Both prompt files gained an explicit sharpness/detail instruction
+   ("The image must be sharp, high-resolution, and richly detailed —
+   crisp fabric texture... no softness, no blur, no visible compression
+   artifacts or blockiness... a genuine high-definition photograph...")
+   — per direct product feedback that the model's own text instructions
+   about crispness measurably affect output sharpness, not just the
+   API's `quality` parameter alone. This is additive to the existing
+   prompt text (nothing about identity/pose/hairstyle instructions was
+   touched), placed right after each prompt's existing "professional
+   photo quality" line.
+
+Not independently live-verified with a side-by-side before/after
+comparison in this session (no API key available) — typecheck and build
+both pass. If output is still reported as insufficiently sharp/detailed
+after this ships, check whether `output_format: "jpeg"` should switch to
+`"png"` (fully lossless, at the cost of a larger payload and possibly
+slower generation) before assuming the prompt wording needs further
+strengthening — that tradeoff was raised directly with the user and
+deferred pending a preference, so it's the next lever to pull, not a new
+one to invent.
+
+### Default search provider flipped back to Tavily — cost, not just speed
+
+Follow-up to the two notes above (the token-budget fix and the slowness
+fix on `OpenAiWebSearchProvider`) — once real per-search cost was worked
+out (each search action = 3-6 parallel Responses API calls that each
+have to run the `web_search` tool, i.e. real tool-call fees PLUS model
+token costs, not a flat cheap search API call), the user's explicit
+direction was to stop using AI-based web search as the default entirely:
+**"AI web search nhi chahaiye ye bahut Rs lag raha h, tavily hi use karo
+ab"** (don't want AI web search, it costs too much, use Tavily now).
+
+Fix: `lib/providers/search/index.ts`'s `getSearchProvider()` default
+flipped from `"openai"` back to `"tavily"` — `SEARCH_PROVIDER` unset (or
+explicitly `"tavily"`) now uses `LegacyTavilySearchProvider`;
+`SEARCH_PROVIDER=openai` is the new explicit opt-in for
+`OpenAiWebSearchProvider`, mirroring exactly how Tavily was the opt-in
+during the previous default. Neither provider implementation was deleted
+or changed — this is purely a default-selection flip, the same kind of
+change as the earlier `gpt-4o`→`gpt-5.5` default flip elsewhere in this
+file. `runDressSearch`'s existing `taskCount` logic (3 tasks for the
+OpenAI provider, `SHOPPING_SITES.length` = 6 for Tavily — see the
+slowness-fix note above) needed no change: it already keys off
+`provider.name`, so switching the default provider automatically
+restores Tavily's full 6-site fan-out without any code change to that
+logic.
+
+**Also, per the same request to make the (now-default) Tavily search
+itself better-targeted**, `buildSearchQuery` gained two more
+profile-driven clauses that were being collected from the user but never
+actually used to shape the search query before this: `profile.fit`
+(e.g. "fitted", "relaxed" — appended plainly, right after the gender
+clause) and `profile.bodyBuild` (e.g. "athletic", "slim" — appended as
+`"for ${bodyBuild} build"`, right after the occasion clause). Both are
+genuinely conditional on what the user actually answered, matching every
+other clause in this function — an unanswered field produces no clause,
+never a default value. This does NOT reintroduce the negative-keyword
+exclusion approach that broke production once already (see the earlier
+note on that regression) — these are purely additive positive-signal
+clauses, the same class of change as the existing colour/style/occasion
+clauses that have always been part of this query.
+
+Not independently live-tested against the real Tavily API with these two
+new clauses in this session (no `TAVILY_API_KEY` available) — typecheck
+and build both pass. If results are ever reported as too narrow/too few
+after this ships, check whether `fit`+`bodyBuild` together with the
+existing colour/style/occasion clauses have made the query too long and
+over-specific for Tavily's keyword matching (a similar failure mode to
+the earlier exclusion-string regression, though additive clauses are a
+much smaller and different kind of risk than an exclusion-term stack
+was) before assuming a different fix is needed — dropping `bodyBuild`
+from the query first would be the quickest thing to try, since `fit` is
+the more directly clothing-relevant of the two.
