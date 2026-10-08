@@ -12,14 +12,21 @@ import { z } from "zod";
 
 const router: IRouter = Router();
 
-const SYSTEM_PROMPT = `You are SkinTune's styling engine. Given a user's appearance, body, taste, and occasion profile, propose exactly 5 distinct complete-look recommendations.
+const SYSTEM_PROMPT = `You are SkinTune's styling engine. Given a user's appearance, persona, body, taste, and occasion profile, propose exactly 5 distinct complete-look recommendations.
 
 Guidelines:
-- Each look must be a genuinely complete outfit: outfit, colour direction, jewellery, hairstyle, makeup, footwear, and accessories.
-- Vary the 5 looks meaningfully — not just different outfit details, but a genuinely different PERSONALITY AND ENERGY per look, because a downstream photo-generation step uses your "vibe" and "personaEnergy" fields to decide how the person should be posed and photographed for each look, and near-duplicate energy across looks produces near-duplicate photos. The 5 "vibe" values must be 5 DIFFERENT single words, no repeats, chosen freely to fit this person and occasion (do not just reuse "Elegant"/"Modern"/"Minimal"/"Bold"/"Glamorous" every time — pick whatever 5 distinct words genuinely fit, e.g. "Radiant", "Grounded", "Playful", "Regal", "Effortless", "Daring", "Serene", "Magnetic" — vary them per request). "personaEnergy" must be 1-2 vivid sentences describing how this person would actually move, stand, and feel in this specific look — concrete enough that a photographer could act on it (e.g. "Warm and unhurried — the kind of confidence that doesn't need to perform, a soft knowing smile" vs. "Sharp and electric — chin up, a look that says she owns the room the second she walks in"). Make these 5 personaEnergy descriptions clearly distinguishable from each other; do not let two looks read as the same energy in different words.
+- Each look must be a genuinely complete styling recommendation tailored specifically to the person's persona (Women, Men, or Children):
+  * For Women: Complete outfit, colour direction, jewellery, hairstyle, makeup, footwear, and accessories. For makeup, provide concrete flattering direction based on their skin tone and undertone (e.g. foundation undertone and finish, lip shade, blush).
+  * For Men: Complete outfit (e.g. kurta/sherwani/suit/blazer/chinos/etc.), colour direction, footwear, accessories (watch, pocket square, belt, sunglasses, cufflinks), grooming/hairstyle, and jewellery if appropriate. Set makeup to "Clean natural grooming" or "None". Do NOT prescribe women's makeup to men unless explicitly requested.
+  * For Children: Age-appropriate, playful, celebratory, comfortable outfit and footwear. Simple child-friendly accessories (hat, cap, hairband, watch). Strictly NO adult makeup ("None (child-friendly natural skin)"), NO adult high heels, and NO mature styling.
+- Dynamically determine applicableCategories for each look based on the persona and occasion:
+  * Women: ["outfit", "makeup", "jewellery", "footwear", "accessories"]
+  * Men: ["outfit", "footwear", "accessories", "jewellery"]
+  * Children: ["outfit", "footwear", "accessories"]
+- Vary the 5 looks meaningfully — not just different outfit details, but a genuinely different PERSONALITY AND ENERGY per look, because a downstream photo-generation step uses your "vibe" and "personaEnergy" fields to decide how the person should be posed and photographed for each look, and near-duplicate energy across looks produces near-duplicate photos. The 5 "vibe" values must be 5 DIFFERENT single words, no repeats, chosen freely to fit this person and occasion (do not just reuse "Elegant"/"Modern"/"Minimal"/"Bold"/"Glamorous" every time — pick whatever 5 distinct words genuinely fit, e.g. "Radiant", "Grounded", "Playful", "Regal", "Effortless", "Daring", "Serene", "Magnetic" — vary them per request). "personaEnergy" must be 1-2 vivid sentences describing how this person would actually move, stand, and feel in this specific look — concrete enough that a photographer could act on it. Make these 5 personaEnergy descriptions clearly distinguishable from each other.
 - One look should be the closest overall match to their stated preferences; the other 4 should meaningfully diverge from it and from each other in vibe/energy, not just in colour or garment type.
 - Respect the user's stated colour preferences and restrictions; never contradict a stated dislike.
-- The user was NOT asked to separately state a style-vs-comfort priority or occasion notes beyond a single occasion word — infer a sensible balance of style and comfort yourself from their style-world choices, desired impression, and occasion (e.g. glamorous/luxury style choices or a formal occasion lean toward style-first; casual/minimal choices or an everyday occasion lean toward comfort-first), and infer reasonable context for the occasion from the occasion word alone (e.g. "Wedding" implies a celebratory, semi-formal to formal setting) without needing it spelled out.
+- Infer a sensible balance of style and comfort yourself from their style-world choices, desired impression, and occasion, and infer reasonable context for the occasion from the occasion word alone without needing it spelled out.
 - reasoning must be 3-5 short, concrete, supportive bullet points explaining why THIS look suits THIS person's profile (appearance, body/fit, occasion, impression). Never use words like "flaws", "hide your body", "make you fairer", "dull", "unsuitable body", or "imperfections" — this product is about confidence and expression, never judgement or diagnosis.
 - confidence is an integer 0-100 reflecting how well the look matches the stated profile.
 - palette is an array of 3 hex color strings representing the look's dominant colours.
@@ -28,7 +35,9 @@ Guidelines:
 
 function buildUserPrompt(profile: SkinTuneProfile): string {
   return `User profile:
-- Styling for: ${profile.pronouns || "not specified"}, age group ${profile.ageGroup || "not specified"}, height ${profile.height || "not specified"}
+- Persona & pronouns: ${profile.pronouns || "not specified"}
+- Age group: ${profile.ageGroup || "not specified"}
+- Height: ${profile.height || "not specified"}
 - Appearance: skin tone ${profile.appearance.skinTone || "unspecified"}, ${profile.appearance.undertone || "unspecified"} undertone, contrast ${profile.appearance.contrast || "unspecified"}
 - Body build: ${profile.bodyBuild || "not specified"}
 - Fit preference: ${profile.fit || "no strong preference"}
@@ -70,10 +79,6 @@ const LOOK_JSON_SCHEMA = {
     title: { type: "string" },
     note: { type: "string" },
     category: { type: "string" },
-    // See skintune-schemas.ts's LookRecommendationSchema doc comments —
-    // these two feed the downstream image-generation pose agent so each of
-    // the 5 looks gets a genuinely different pose/expression, not just a
-    // different outfit on the same expression.
     vibe: { type: "string" },
     personaEnergy: { type: "string" },
     palette: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 3 },
@@ -87,10 +92,12 @@ const LOOK_JSON_SCHEMA = {
     footwear: { type: "string" },
     reasoning: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 5 },
     confidence: { type: "integer" },
+    applicableCategories: { type: "array", items: { type: "string" } },
   },
   required: [
     "id", "title", "note", "category", "vibe", "personaEnergy", "palette", "pieces", "outfit",
     "outfitColor", "jewellery", "hairstyle", "makeup", "accessories", "footwear", "reasoning", "confidence",
+    "applicableCategories",
   ],
   additionalProperties: false,
 } as const;

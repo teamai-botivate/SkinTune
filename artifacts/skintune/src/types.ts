@@ -39,46 +39,114 @@ export type SkinTuneProfile = {
 /** Alias kept for continuity with a future backend contract. */
 export type UserProfile = SkinTuneProfile;
 
-// ---- real-dress-search branch ----
-//
-// LookPiece, LookRecommendation, LookFeedback, and GenerationResult (the
-// AI-generated-look contract with recommendation-engine.ts/
-// image-generation.ts) were removed here — this branch replaces that flow
-// entirely with real web-sourced dresses. See CLAUDE.md.
-//
-// Replaces the AI-generated-look flow: instead of GPT-4o inventing an
-// outfit description, the backend searches the real web (Tavily) for
-// actual purchasable dresses/outfits matching the profile. See
-// services/dress-search.ts and artifacts/api-server/src/routes/
-// search-dresses.ts.
+export type LookPiece = {
+  category: string;
+  name: string;
+  detail: string;
+};
 
-export type DressResult = {
+// A complete-look recommendation. This is the contract between the
+// recommendation engine and the image-generation service (see
+// services/recommendation-engine.ts and services/image-generation.ts) — it
+// carries enough structured styling data for an image provider to visualize
+// the look without inventing its own styling strategy.
+export type LookRecommendation = {
   id: string;
   title: string;
+  note: string;
+  category?: string;
+  /** A single distinct mood word (e.g. "Radiant", "Grounded") used to drive per-look pose/expression in image generation. */
+  vibe?: string;
+  /** 1-2 sentences of photographer-facing pose/energy direction for this specific look. */
+  personaEnergy?: string;
+  palette: string[];
+  pieces: LookPiece[];
+  outfit: string;
+  outfitColor: string;
+  jewellery: string;
+  hairstyle: string;
+  makeup: string;
+  accessories: string;
+  footwear: string;
+  reasoning: string[];
+  confidence: number;
   imageUrl: string;
-  siteName: string;
-  /** Where "Interested" sends the user — this photo's own source store domain, not necessarily the exact product page. */
-  sourceUrl: string;
+  applicableCategories?: string[];
 };
 
-/** A general shopping link shown alongside the dress grid — a real store's page, not tied to any specific DressResult card. */
-export type ShopLink = {
-  title: string;
-  url: string;
-  siteName: string;
-  price?: string;
+export type ProductCategory =
+  | 'outfit'
+  | 'makeup'
+  | 'jewellery'
+  | 'accessories'
+  | 'footwear';
+
+export type PriceTier = 'budget' | 'mid' | 'premium';
+
+export type ProductResult = {
+  id: string;
+  category: ProductCategory;
+  subcategory: string;
+  recommendedItemTitle?: string;
+  brand: string;
+  productName: string;
+  retailer: string;
+  price?: number;
+  formattedPrice?: string;
+  originalPrice?: number;
+  formattedOriginalPrice?: string;
+  currency?: string;
+  priceTier?: PriceTier;
+  priceVerified?: boolean;
+  productVerified?: boolean;
+  shade?: string;
+  color?: string;
+  material?: string;
+  description?: string;
+  imageUrl?: string;
+  productUrl: string;
+  urlType?: 'exact_product' | 'search_result';
+  isVerified?: boolean;
+  matchScore?: number;
+  matchReason: string;
+  availability?: string;
+  source?: string;
+  lastChecked?: string;
 };
 
-// ---- real-dress-avatar-intelligent-tryon branch ----
-//
-// Mirrors the backend's SessionMemorySchema/ProductFeedbackTypeSchema (see
-// artifacts/api-server/src/lib/skintune-schemas.ts) — "search memory" and
-// Interested/Not-Interested feedback, per this branch's product spec.
+export type ProductGroup = {
+  category: ProductCategory;
+  recommendedItemTitle: string;
+  stylingRequirement: string;
+  products: ProductResult[];
+};
 
-export type ProductFeedbackType = 'INTERESTED' | 'NOT_INTERESTED';
+export type ProductRecommendationsRequest = {
+  look: LookRecommendation;
+  profile: SkinTuneProfile;
+  category?: ProductCategory | 'all';
+};
 
-export type SessionMemory = {
-  seenTitles: string[];
-  rejected: Array<{ title: string; reason?: string }>;
-  interested: string[];
+export type ProductRecommendationsResponse = {
+  lookId: string;
+  persona: 'woman' | 'man' | 'child' | 'neutral';
+  applicableCategories: string[];
+  products: ProductResult[];
+  groups?: ProductGroup[];
+  status: 'success' | 'partial' | 'unavailable';
+  disclaimer?: string;
+  searchedAt: string;
+  totalFound: number;
+};
+
+export type LookFeedback = {
+  feeling: string;
+  changeRequest: string;
+  changeAreas: string[];
+  lookId?: string;
+};
+
+export type GenerationResult = {
+  recommendations: LookRecommendation[];
+  generatedAt: string;
 };

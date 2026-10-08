@@ -5,29 +5,30 @@ import { Toaster } from '@/components/ui/toaster';
 import { ErrorBoundary } from '@/components/error-boundary';
 import {
   ArrowLeft, ArrowRight, Camera, Check, CheckCircle2, ChevronDown, ChevronRight,
-  CircleHelp, Clock3, FileText, Heart, Info, LockKeyhole, Pencil, RefreshCw,
+  CircleHelp, Clock3, Download, FileText, Heart, Info, LockKeyhole, Pencil, RefreshCw,
   RotateCcw, Save, ShieldCheck, Sparkles, Trash2, Upload, Wand2, X, SlidersHorizontal,
+  ShoppingBag,
 } from 'lucide-react';
-import { searchDresses, tryOnDress, researchAgain, refineSearch, sendProductFeedback } from './services/dress-search';
+import { ShopLookSection } from './components/shop-look-section';
+import { getLookRecommendations } from './services/recommendation-engine';
+import { generateLookImages, refineLookImage } from './services/image-generation';
 import { analyzePhoto } from './services/photo-analysis';
-import * as avatarService from './services/avatar';
-import { createEmptySessionMemory, recordSeen, recordInterested, recordRejected } from './services/shopping-session';
-import { createActivityLog, type LogStep } from './lib/activity-log';
 import { photoAnalysisStages, photoDiagnostics } from './data/photo-diagnostics';
 import {
-  ageGroupOptions, bodyBuildOptions, budgetOptions, colorLoveOptions,
-  fitOptions, homeOccasionShortcuts,
-  impressionOptions, occasionOptions, pronounOptions,
-  styleOptions, type SelectOption,
+  ageGroupOptions, bodyBuildOptions, budgetOptions, colorAvoidOptions, colorLoveOptions,
+  feedbackChangeOptions, feedbackFeelingOptions, fitOptions, homeOccasionShortcuts,
+  impressionOptions, lookCategoryBadges, occasionOptions, pronounOptions,
+  restrictionOptions, styleOptions, type SelectOption,
 } from './data/options';
-import type { DressResult, PhotoStatus, ShopLink, SkinTuneProfile, SessionMemory } from './types';
+import type { LookRecommendation, PhotoStatus, SkinTuneProfile } from './types';
+import { LandingPage } from './components/landing/LandingPage';
 
 const queryClient = new QueryClient();
 
 type Screen =
   | 'welcome' | 'home' | 'name' | 'profile' | 'age' | 'height' | 'consent' | 'photo' | 'appearance'
-  | 'body-style' | 'colors-occasion' | 'final-prefs' | 'review' | 'generating' | 'dresses'
-  | 'dress-detail' | 'try-on' | 'settings';
+  | 'body-style' | 'colors-occasion' | 'final-prefs' | 'review' | 'generating' | 'results'
+  | 'detail' | 'feedback' | 'settings';
 
 const initialProfile: SkinTuneProfile = {
   name: '', pronouns: '', ageGroup: '', height: '', photoUrl: '', bodyBuild: '',
@@ -40,13 +41,7 @@ const initialProfile: SkinTuneProfile = {
 // section screens (each holding several related fields with checkbox-style
 // cards) instead of one screen per field — this cuts an 11-screen tap-through
 // down to 3 sections so filling in preferences after photo upload takes
-// meaningfully less time. A single-screen version (all 7 fields merged
-// into one long scroll) was tried and reverted per direct user feedback
-// ("ek hi screen pe mat karo") — one dense scroll of 7 fields read as
-// worse than three lighter, clearly-separated sections, even though the
-// single-screen version had fewer taps. Keep this as 3 sections; if
-// shortening the form is asked for again, look for genuine content cuts
-// (a field nothing reads) rather than re-merging screens.
+// meaningfully less time.
 const wizardScreens: Screen[] = [
   'name', 'profile', 'age', 'height', 'consent', 'photo', 'appearance',
   'body-style', 'colors-occasion', 'final-prefs', 'review',
@@ -438,235 +433,272 @@ function AppearanceStep({ profile, onNext, onPhoto, onBack }: { profile: SkinTun
 
 // ---------- Marketing / generating / results screens ----------
 
-function Welcome({ onStart, onPrivacy }: { onStart: () => void; onPrivacy: () => void }) {
-  return <div className="noise min-h-[100dvh] overflow-hidden"><div className="mx-auto flex min-h-[100dvh] max-w-6xl flex-col px-5 py-6 sm:px-10">
-    <header className="flex items-center justify-between"><div className="flex items-center gap-2"><span className="grid size-10 place-items-center rounded-[14px] bg-primary text-primary-foreground"><Sparkles size={19} /></span><span className="font-serif text-2xl font-semibold">SkinTune</span></div><button type="button" onClick={onPrivacy} data-testid="button-welcome-privacy" className="focus-ring rounded-full px-3 py-2 text-sm font-semibold text-muted-foreground hover:bg-secondary">Privacy, plainly</button></header>
-    <div className="relative grid flex-1 items-center gap-12 py-16 lg:grid-cols-[1.05fr_.95fr] lg:gap-24">
-      <div className="relative z-10 animate-rise"><p className="mb-5 text-xs font-bold uppercase tracking-[.24em] text-primary">A personal styling journal</p><h1 className="max-w-3xl font-serif text-[clamp(3.7rem,9vw,8.3rem)] leading-[.84] tracking-[-.06em]">Dress like<br /><em className="text-primary">yourself.</em></h1><p className="mt-8 max-w-lg text-lg leading-relaxed text-muted-foreground">SkinTune turns your real life, your coloring, and your point of view into supportive styling guidance that feels unmistakably yours.</p><button type="button" onClick={onStart} data-testid="button-start" className="focus-ring mt-9 inline-flex items-center gap-3 rounded-full bg-primary px-7 py-4 font-bold text-primary-foreground shadow-[0_12px_26px_hsl(var(--primary)/.22)] transition hover:-translate-y-1">Start your edit <ArrowRight size={18} /></button><p className="mt-5 flex items-center gap-2 text-xs text-muted-foreground"><LockKeyhole size={13} /> Private by design · about 4 minutes</p></div>
-      <div className="relative mx-auto aspect-square w-full max-w-[470px] animate-floaty"><div className="absolute inset-[8%] rounded-[45%_55%_49%_51%/42%_43%_57%_58%] bg-secondary/80" /><div className="absolute inset-[17%] rounded-[52%_48%_42%_58%/54%_43%_57%_46%] border border-primary/20 bg-[#e8b493]" /><div className="absolute left-[31%] top-[28%] h-[45%] w-[39%] rounded-[45%_55%_48%_52%/40%_38%_62%_60%] bg-[#6d4038] shadow-[12px_22px_0_#cb7e61]" /><div className="absolute bottom-[19%] left-[22%] right-[20%] h-[26%] rounded-t-[50%] bg-accent" /><div className="absolute bottom-[12%] left-[31%] h-[10%] w-[37%] rounded-full bg-primary/85" /><div className="absolute -right-3 top-[17%] rounded-2xl border border-border bg-card px-4 py-3 shadow-xl"><p className="text-[10px] font-bold uppercase tracking-[.16em] text-muted-foreground">Your palette</p><div className="mt-2 flex gap-1.5"><i className="size-5 rounded-full bg-[#c9a35c]" /><i className="size-5 rounded-full bg-[#1c1917]" /><i className="size-5 rounded-full bg-[#e8d5a3]" /><i className="size-5 rounded-full bg-[#8a6d3f]" /></div></div><div className="absolute -bottom-1 -left-3 max-w-[180px] rounded-2xl border border-border bg-card px-4 py-3 shadow-xl"><p className="text-sm font-semibold leading-tight">Not a score.<br /><span className="text-primary">A point of view.</span></p></div></div>
-    </div>
-    <footer className="flex flex-wrap justify-between gap-4 border-t border-border/70 py-5 text-xs text-muted-foreground"><span>Made for getting dressed, not getting judged.</span><span>SkinTune · 2025</span></footer>
-  </div></div>;
+function Welcome({
+  onStart,
+  onPrivacy,
+  onQuickStart,
+  hasExistingProfile,
+  onGoHome,
+}: {
+  onStart: () => void;
+  onPrivacy: () => void;
+  onQuickStart?: (occasion: string) => void;
+  hasExistingProfile?: boolean;
+  onGoHome?: () => void;
+}) {
+  return (
+    <LandingPage
+      onStart={onStart}
+      onPrivacy={onPrivacy}
+      onQuickStart={onQuickStart}
+      hasExistingProfile={hasExistingProfile}
+      onGoHome={onGoHome}
+    />
+  );
 }
 
-function DressVisual({ dress, large = false }: { dress: DressResult; large?: boolean }) {
-  return <div className={`relative overflow-hidden rounded-[1.4rem] bg-[#e4d6c4] ${large ? 'min-h-[390px]' : 'h-56'}`}>
-    <img src={dress.imageUrl} alt={dress.title} className="size-full object-cover" loading="lazy" />
-    <span className="absolute bottom-3 left-3 rounded-full bg-card/80 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.14em] text-foreground backdrop-blur">{dress.siteName}</span>
+// A real generated image is a data: URL (base64, from the mock/AI image
+// service) or an http(s) URL from a provider. The mock/placeholder state
+// uses a "/replace-with-generated/..." local path that was never meant to
+// resolve to a real file — treat that (or emptiness) as "no image yet".
+const hasRealImage = (url: string) => Boolean(url) && !url.startsWith('/replace-with-generated/');
+
+function LookVisual({ look, large = false }: { look: LookRecommendation; large?: boolean }) {
+  if (hasRealImage(look.imageUrl)) {
+    return <div className={`relative overflow-hidden rounded-[1.4rem] bg-[#e4d6c4] ${large ? 'min-h-[390px]' : 'h-56'}`}>
+      <img src={look.imageUrl} alt={`${look.title} — style visualisation`} className="size-full object-cover" loading="lazy" />
+      <span className="absolute bottom-3 left-3 rounded-full bg-card/80 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.14em] text-foreground backdrop-blur">Style visualisation</span>
+    </div>;
+  }
+  return <div className={`relative overflow-hidden rounded-[1.4rem] bg-[#e4d6c4] ${large ? 'min-h-[390px]' : 'h-56'}`} data-image-url={look.imageUrl} aria-label={`${look.title} visual placeholder`}>
+    <div className="absolute inset-0 opacity-75" style={{ background: `radial-gradient(circle at 68% 21%, ${look.palette[1]} 0 8%, transparent 8.5%), linear-gradient(145deg, ${look.palette[2]} 0 38%, ${look.palette[0]} 38% 70%, #b78668 70%)` }} />
+    <div className="absolute bottom-[-8%] left-[23%] h-[82%] w-[55%] rounded-t-[48%] bg-card/70 mix-blend-screen" />
+    <div className="absolute left-[39%] top-[16%] size-[22%] rounded-full bg-[#b7785c]" />
+    <div className="absolute bottom-[15%] left-1/2 h-[42%] w-[20%] -translate-x-1/2 rounded-[45%] bg-card/55" />
+    <span className="absolute bottom-3 left-3 rounded-full bg-card/80 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.14em] text-foreground backdrop-blur">Style visualisation · image slot</span>
   </div>;
 }
 
-// The real steps a dress search actually goes through — driven by genuine
-// progress events from services/dress-search.ts (via lib/activity-log.ts),
-// not a cosmetic timer. "Reading your profile" is the one synthetic step
-// (marked done immediately, since there's no separate network call for
-// it) so the checklist doesn't open on an empty first row; every other
-// step's status reflects a real request boundary, and a failed step shows
-// its own real error message rather than a generic one.
-const SEARCH_STEPS = ['Reading your profile', 'Searching real stores', 'Building your results'];
+// Stages the "Generating" screen cycles through. Real generation (5 images,
+// each ~30s-100s depending on image-model quality settings) takes far
+// longer than these stages alone would suggest, so this deliberately keeps
+// cycling/animating for as long as the screen is mounted rather than
+// finishing early and sitting static — see the interval logic below.
+const generatingStages = [
+  'Reading the room',
+  'Balancing your palette',
+  'Building complete outfits',
+  'Styling every detail',
+  'Fitting each piece to you',
+  'Rendering your look',
+  'Adding the finishing touches',
+];
 
-function StepChecklist({ steps }: { steps: LogStep[] }) {
-  return <div className="mt-16 max-w-md space-y-3" data-testid="list-generating-steps">
-    {steps.map((step) => <div key={step.label} className="flex items-start gap-3">
-      <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full">
-        {step.status === 'done' && <CheckCircle2 size={20} className="text-accent" />}
-        {step.status === 'error' && <X size={20} className="text-destructive" />}
-        {step.status === 'active' && <span className="relative grid size-5 place-items-center"><span className="absolute inset-0 animate-ping rounded-full bg-primary/40" /><span className="relative grid size-5 place-items-center rounded-full bg-primary"><RefreshCw size={11} className="animate-spin text-primary-foreground" /></span></span>}
-        {step.status === 'pending' && <span className="size-2.5 rounded-full bg-border" />}
-      </span>
-      <div className="min-w-0">
-        <p className={`text-sm font-semibold ${step.status === 'pending' ? 'text-muted-foreground' : 'text-foreground'}`}>{step.label}</p>
-        {step.status === 'error' && step.detail && <p className="mt-0.5 text-xs text-destructive">{step.detail}</p>}
-      </div>
-    </div>)}
-  </div>;
-}
-
-function Generating({ steps, error, onRetry, onBack }: { steps: LogStep[]; error: string; onRetry: () => void; onBack: () => void }) {
+function Generating() {
+  const [active, setActive] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   useEffect(() => {
-    if (error) return;
+    // Cycles through the stage list on repeat (not once-and-stop) so the
+    // screen stays visibly active for the full real generation time —
+    // previously the 4 stages finished in ~2.5s and then sat frozen on the
+    // last one for the remaining ~90s+ of actual work, which read as stuck.
+    const stageTimer = window.setInterval(() => setActive((value) => (value + 1) % generatingStages.length), 2600);
     const clockTimer = window.setInterval(() => setElapsedSeconds((value) => value + 1), 1000);
-    return () => window.clearInterval(clockTimer);
-  }, [error]);
+    return () => { window.clearInterval(stageTimer); window.clearInterval(clockTimer); };
+  }, []);
   const minutes = Math.floor(elapsedSeconds / 60);
   const seconds = elapsedSeconds % 60;
   return <div className="noise min-h-[100dvh] bg-background text-foreground"><div className="mx-auto flex min-h-[100dvh] max-w-3xl flex-col justify-center px-6 py-16">
     <div className="mb-14 flex items-center gap-2"><span className="grid size-10 place-items-center rounded-[14px] bg-primary text-primary-foreground"><Sparkles size={19} className="animate-pulse" /></span><span className="font-serif text-2xl">SkinTune</span></div>
     <p className="text-xs font-bold uppercase tracking-[.24em] text-primary">Your personal edit</p>
     <h1 className="mt-5 max-w-xl font-serif text-[clamp(3rem,8vw,6.5rem)] leading-[.88] tracking-[-.05em]">Making room<br />for your <em className="text-primary">point of view.</em></h1>
-    <StepChecklist steps={steps} />
-    {error ? <div className="mt-6 max-w-md animate-rise" data-testid="text-generating-error">
-      <p className="text-sm font-semibold text-destructive">{error}</p>
-      <div className="mt-4 flex flex-wrap gap-3">
-        <button type="button" onClick={onRetry} data-testid="button-retry-search" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-bold text-primary-foreground"><RefreshCw size={15} /> Try again</button>
-        <button type="button" onClick={onBack} data-testid="button-generating-back" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold hover:border-primary/50">Back</button>
-      </div>
-    </div> : <p className="mt-6 flex items-center gap-2 text-xs text-muted-foreground"><Clock3 size={14} /> {elapsedSeconds < 3 ? 'Getting started…' : `${minutes > 0 ? `${minutes}m ` : ''}${seconds}s so far — check the browser console for full detail.`}</p>}
+    <div className="mt-16 flex max-w-md items-center gap-4" data-testid="text-generating-stage">
+      <span className="relative grid size-9 shrink-0 place-items-center">
+        <span className="absolute inset-0 animate-ping rounded-full bg-primary/40" />
+        <span className="relative grid size-9 place-items-center rounded-full bg-primary text-primary-foreground"><RefreshCw size={16} className="animate-spin" /></span>
+      </span>
+      <span key={active} className="animate-rise text-lg font-semibold">{generatingStages[active]}…</span>
+    </div>
+    <div className="mt-6 h-1.5 max-w-md overflow-hidden rounded-full bg-secondary">
+      <div className="h-full w-1/3 animate-[indeterminate_1.6s_ease-in-out_infinite] rounded-full bg-primary" />
+    </div>
+    <p className="mt-8 flex items-center gap-2 text-xs text-muted-foreground"><Clock3 size={14} /> {elapsedSeconds < 5 ? 'Getting started…' : `${minutes > 0 ? `${minutes}m ` : ''}${seconds}s so far — five complete looks take real, careful work.`}</p>
   </div></div>;
 }
 
-type SavedDress = { dress: DressResult; imageUrl: string };
-
-function Home({ profile, savedDresses, onNew, onResults, onSettings, onQuickStart }: {
-  profile: SkinTuneProfile; savedDresses: SavedDress[]; onNew: () => void; onResults: () => void;
-  onSettings: () => void; onQuickStart: (occasion: string) => void;
+function Home({ profile, savedLooks, generatedLooks, onNew, onResults, onSettings, onLook, onQuickStart, onDiscover }: {
+  profile: SkinTuneProfile; savedLooks: string[]; generatedLooks: LookRecommendation[]; onNew: () => void; onResults: () => void;
+  onSettings: () => void; onLook: (id: string) => void; onQuickStart: (occasion: string) => void; onDiscover: () => void;
 }) {
   return <div className="noise min-h-[100dvh]"><Header onSettings={onSettings} name={profile.name} /><main className="mx-auto max-w-6xl px-4 py-10 sm:px-8 sm:py-16">
     <div className="grid gap-10 lg:grid-cols-[1.1fr_.9fr] lg:items-end">
       <div className="animate-rise"><p className="text-xs font-bold uppercase tracking-[.22em] text-primary">How can SkinTune style you today?</p><h1 className="mt-4 max-w-2xl font-serif text-[clamp(3rem,7vw,6.2rem)] leading-[.88] tracking-[-.05em]">Good to see you,<br /><em className="text-primary">{profile.name}.</em></h1><p className="mt-6 max-w-lg text-lg leading-relaxed text-muted-foreground">Pick a moment to get dressed for, or pick up where you left off.</p>
         <div className="mt-7 flex flex-wrap gap-2">{homeOccasionShortcuts.map((item) => <button type="button" key={item.label} onClick={() => onQuickStart(item.label)} data-testid={`button-quickstart-${item.label.toLowerCase().replace(/\s+/g, '-')}`} className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-semibold transition hover:-translate-y-0.5 hover:border-primary/50"><span aria-hidden>{item.icon}</span>{item.label}</button>)}</div>
-        <div className="mt-6 flex flex-wrap gap-3"><button type="button" onClick={onResults} data-testid="button-view-looks" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3.5 text-sm font-bold text-primary-foreground shadow-lg">Browse dresses for you <ArrowRight size={16} /></button><button type="button" onClick={onNew} data-testid="button-new-edit" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-6 py-3.5 text-sm font-bold hover:border-primary/50"><RefreshCw size={16} /> New edit</button></div>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <button type="button" onClick={onResults} data-testid="button-view-looks" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3.5 text-sm font-bold text-primary-foreground shadow-lg">View your five looks <ArrowRight size={16} /></button>
+          <button type="button" onClick={onNew} data-testid="button-new-edit" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-6 py-3.5 text-sm font-bold hover:border-primary/50"><RefreshCw size={16} /> New edit</button>
+          <button type="button" onClick={onDiscover} data-testid="button-discover-guide" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-6 py-3.5 text-sm font-bold hover:border-primary/50"><Sparkles size={16} /> Styling Guide</button>
+        </div>
       </div>
       <div className="soft-grid relative overflow-hidden rounded-[1.7rem] border border-border bg-secondary/60 p-7"><div className="absolute -right-14 -top-14 size-48 rounded-full bg-primary/15 blur-2xl" /><p className="relative text-xs font-bold uppercase tracking-[.16em] text-muted-foreground">Your signature direction</p><h2 className="relative mt-3 font-serif text-3xl">Rich, considered, quietly luxe.</h2><div className="relative mt-7 flex items-end gap-2"><div className="h-20 w-12 rounded-t-full bg-[#c9a35c]" /><div className="h-28 w-12 rounded-t-full bg-[#1c1917]" /><div className="h-16 w-12 rounded-t-full bg-[#e8d5a3]" /><div className="h-24 w-12 rounded-t-full bg-[#8a6d3f]" /></div><p className="relative mt-6 text-sm leading-relaxed text-muted-foreground">Your saved palette leans into depth and gold, with room for one clear surprise.</p></div>
     </div>
-    {savedDresses.length > 0 && <section className="mt-20"><div className="flex items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-primary">Saved for later</p><h2 className="mt-2 font-serif text-3xl">Your keepers</h2></div><button type="button" onClick={onResults} data-testid="button-see-all-saved" className="focus-ring text-sm font-bold text-primary">See all <ArrowRight className="ml-1 inline" size={15} /></button></div><div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{savedDresses.map((saved) => <a key={saved.dress.id} href={saved.dress.sourceUrl} target="_blank" rel="noreferrer" data-testid={`card-saved-look-${saved.dress.id}`} className="focus-ring rounded-[1.3rem] border border-border bg-card p-2 text-left transition hover:-translate-y-1"><div className="relative h-56 overflow-hidden rounded-[1.15rem] bg-[#e4d6c4]"><img src={saved.imageUrl} alt={saved.dress.title} className="size-full object-cover" loading="lazy" /></div><p className="px-3 pb-2 pt-3 font-serif text-xl">{saved.dress.title}</p></a>)}</div></section>}
+    {savedLooks.length > 0 && <section className="mt-20"><div className="flex items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-primary">Saved for later</p><h2 className="mt-2 font-serif text-3xl">Your keepers</h2></div><button type="button" onClick={onResults} data-testid="button-see-all-saved" className="focus-ring text-sm font-bold text-primary">See all <ArrowRight className="ml-1 inline" size={15} /></button></div><div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{savedLooks.map((id) => { const look = generatedLooks.find((item) => item.id === id); return look && <button type="button" key={id} onClick={() => onLook(id)} data-testid={`card-saved-look-${id}`} className="focus-ring rounded-[1.3rem] border border-border bg-card p-2 text-left transition hover:-translate-y-1"><LookVisual look={look} /><p className="px-3 pb-2 pt-3 font-serif text-xl">{look.title}</p></button>; })}</div></section>}
   </main></div>;
 }
 
-function DressGrid({
-  profile, dresses, shopLinks, hasMore, loadingMore, loadMoreError, onViewDress, onLoadMore, onBack,
-  interestedTitles, rejectedTitles, onInterested, onNotInterested,
-  onResearchAgain, researchingAgain, onRefine, refining, refinementText, onRefinementTextChange,
-  avatarError,
-}: {
-  profile: SkinTuneProfile; dresses: DressResult[]; shopLinks: ShopLink[]; hasMore: boolean; loadingMore: boolean; loadMoreError: string;
-  onViewDress: (dress: DressResult) => void; onLoadMore: () => void; onBack: () => void;
-  interestedTitles: string[]; rejectedTitles: string[];
-  onInterested: (dress: DressResult) => void; onNotInterested: (dress: DressResult, reason?: string) => void;
-  onResearchAgain: () => void; researchingAgain: boolean;
-  onRefine: (text: string) => void; refining: boolean; refinementText: string; onRefinementTextChange: (v: string) => void;
-  avatarError: string;
-}) {
-  // Optional quick reason chips (this branch's product spec, section 23) —
-  // never a required form; a bare "Not Interested" tap with no reason still
-  // records the rejection immediately (see the button's own onClick).
-  const rejectionReasons = ['Too flashy', 'Wrong color', 'Wrong fit', 'Too expensive', 'Not my style'];
-  const [reasonPromptFor, setReasonPromptFor] = useState<string | null>(null);
-
+function Results({ profile, looks: resultLooks, savedLooks, onSave, onLook, onFeedback, onBack }: { profile: SkinTuneProfile; looks: LookRecommendation[]; savedLooks: string[]; onSave: (id: string) => void; onLook: (id: string) => void; onFeedback: () => void; onBack: () => void }) {
   return <Shell profile={profile} onBack={onBack} onSettings={onBack}><div className="animate-rise">
-    <div className="flex flex-wrap items-end justify-between gap-6"><div><p className="text-xs font-bold uppercase tracking-[.2em] text-primary">✨ Real Dresses For You</p><h1 className="mt-3 font-serif text-[clamp(2.8rem,6vw,5.4rem)] leading-[.9] tracking-[-.05em]">Pick one to<br /><em className="text-primary">try it on.</em></h1></div></div>
-    <p className="mt-6 max-w-xl text-muted-foreground">Real pieces from real stores, matched to {profile.occasion.toLowerCase() || 'your moment'}. Tap any one to see the full piece before trying it on.</p>
-    {avatarError && <div className="mt-4 rounded-2xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive" data-testid="text-avatar-error">Your personal avatar couldn't be created ({avatarError}) — you can still browse, but "Try this on" won't work until this is resolved.</div>}
-
-    {/* Refine Search (this branch's product spec, section 26) — free-text steering, temporary for this session. */}
-    <div className="mt-8 flex flex-wrap items-stretch gap-2">
-      <input
-        type="text"
-        value={refinementText}
-        onChange={(e) => onRefinementTextChange(e.target.value)}
-        placeholder="Refine — e.g. more elegant, dark green, less expensive…"
-        data-testid="input-refine-search"
-        className="focus-ring min-w-0 flex-1 rounded-full border border-border bg-card px-5 py-3 text-sm outline-none placeholder:text-muted-foreground/60"
-      />
-      <button type="button" onClick={() => refinementText.trim() && onRefine(refinementText.trim())} disabled={refining || !refinementText.trim()} data-testid="button-refine-search" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-bold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60">
-        {refining ? <RefreshCw size={15} className="animate-spin" /> : <SlidersHorizontal size={15} />} Refine
-      </button>
-      <button type="button" onClick={onResearchAgain} disabled={researchingAgain} data-testid="button-research-again" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-60">
-        {researchingAgain ? <RefreshCw size={15} className="animate-spin" /> : <RotateCcw size={15} />} Research again
-      </button>
-    </div>
-
-    <div className="mt-10 grid gap-6 md:grid-cols-2 lg:grid-cols-3">{dresses.map((dress) => {
-      const isInterested = interestedTitles.includes(dress.title);
-      const isRejected = rejectedTitles.includes(dress.title);
-      return <article key={dress.id} className="group rounded-[1.45rem] border border-border bg-card p-2 shadow-[0_8px_30px_hsl(var(--foreground)/.04)]">
-        <button type="button" onClick={() => onViewDress(dress)} data-testid={`card-dress-${dress.id}`} className="focus-ring block w-full text-left">
-          <DressVisual dress={dress} />
-          <div className="p-4 pb-3"><div className="flex items-start justify-between gap-3"><h2 className="min-w-0 font-serif text-xl leading-snug line-clamp-2">{dress.title}</h2><ChevronRight className="mt-1 shrink-0 text-muted-foreground transition group-hover:translate-x-1" size={20} /></div>
-            <p className="mt-2 text-xs font-bold uppercase tracking-[.13em] text-primary">{dress.siteName}</p>
+    <div className="flex flex-wrap items-end justify-between gap-6"><div><p className="text-xs font-bold uppercase tracking-[.2em] text-primary">✨ Your 5 Best Looks</p><h1 className="mt-3 font-serif text-[clamp(2.8rem,6vw,5.4rem)] leading-[.9] tracking-[-.05em]">A wardrobe of<br /><em className="text-primary">possibilities.</em></h1></div><button type="button" onClick={onFeedback} data-testid="button-request-changes" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-3 text-sm font-bold hover:border-primary/50"><SlidersHorizontal size={16} /> Change the direction</button></div>
+    <p className="mt-6 max-w-xl text-muted-foreground">Built for {profile.occasion.toLowerCase() || 'your moment'} with a {profile.impression.join(' and ').toLowerCase() || 'considered'} energy. Nothing here is a rule — just five places to begin.</p>
+    <div className="mt-10 grid gap-6 md:grid-cols-2 lg:grid-cols-3">{resultLooks.map((look, index) => {
+      const badge = lookCategoryBadges[index] ?? lookCategoryBadges[lookCategoryBadges.length - 1];
+      return <article key={look.id} className={`group rounded-[1.45rem] border border-border bg-card p-2 shadow-[0_8px_30px_hsl(var(--foreground)/.04)] ${index === 0 ? 'md:col-span-2 lg:col-span-2' : ''}`}>
+        <button type="button" onClick={() => onLook(look.id)} data-testid={`card-look-${look.id}`} className="focus-ring block w-full text-left">
+          <LookVisual look={look} large={index === 0} />
+          <div className="p-4 pb-3"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[.15em] text-primary">{badge.icon} {badge.label}</p><h2 className="mt-1 font-serif text-2xl">{look.title}</h2></div><ChevronRight className="mt-2 text-muted-foreground transition group-hover:translate-x-1" size={20} /></div>
+            <p className="mt-2 text-sm text-muted-foreground">{look.note}</p>
+            <dl className="mt-5 grid gap-x-4 gap-y-3 border-t border-border/70 pt-4 sm:grid-cols-2">
+              <div><dt className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">Outfit</dt><dd className="mt-1 text-sm leading-snug">{look.outfit}</dd></div>
+              <div><dt className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">Jewellery</dt><dd className="mt-1 text-sm leading-snug">{look.jewellery}</dd></div>
+              <div><dt className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">Hairstyle</dt><dd className="mt-1 text-sm leading-snug">{look.hairstyle}</dd></div>
+              <div><dt className="text-[10px] font-bold uppercase tracking-[.12em] text-muted-foreground">Makeup</dt><dd className="mt-1 text-sm leading-snug">{look.makeup}</dd></div>
+            </dl>
           </div>
         </button>
-        <div className="flex items-center gap-2 border-t border-border/70 px-3 py-2.5">
-          <button type="button" onClick={() => onInterested(dress)} disabled={isInterested} data-testid={`button-interested-${dress.id}`} className={`focus-ring inline-flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold ${isInterested ? 'bg-primary/15 text-primary' : 'bg-secondary hover:bg-secondary/80'}`}>
-            <Heart size={13} className={isInterested ? 'fill-current' : ''} /> {isInterested ? 'Interested' : 'Interested'}
-          </button>
-          {reasonPromptFor === dress.id ? (
-            <div className="flex flex-1 flex-wrap gap-1">
-              {rejectionReasons.slice(0, 2).map((r) => (
-                <button key={r} type="button" onClick={() => { onNotInterested(dress, r); setReasonPromptFor(null); }} data-testid={`button-reject-reason-${dress.id}`} className="focus-ring rounded-full bg-secondary px-2 py-1.5 text-[11px] font-semibold hover:bg-secondary/80">{r}</button>
-              ))}
-              <button type="button" onClick={() => { onNotInterested(dress); setReasonPromptFor(null); }} data-testid={`button-reject-skip-${dress.id}`} className="focus-ring rounded-full px-2 py-1.5 text-[11px] font-semibold text-muted-foreground hover:bg-secondary/60">Skip</button>
-            </div>
-          ) : (
-            <button type="button" onClick={() => setReasonPromptFor(dress.id)} disabled={isRejected} data-testid={`button-not-interested-${dress.id}`} className={`focus-ring inline-flex flex-1 items-center justify-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold ${isRejected ? 'bg-secondary/60 text-muted-foreground' : 'bg-secondary hover:bg-secondary/80'}`}>
-              <X size={13} /> Not interested
+        <div className="flex items-center justify-between border-t border-border/70 px-4 py-3">
+          <span className="flex items-center gap-2">
+            <span className="flex gap-1.5">
+              {look.palette.map((color) => <i key={color} className="size-4 rounded-full border border-card shadow-sm" style={{ backgroundColor: color }} />)}
+            </span>
+            <span className="text-xs font-semibold text-muted-foreground">{look.confidence}% confidence</span>
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onLook(look.id)}
+              data-testid={`button-shop-${look.id}`}
+              className="focus-ring inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary transition hover:bg-primary hover:text-primary-foreground"
+            >
+              <ShoppingBag size={13} /> Shop look
             </button>
-          )}
+            <button
+              type="button"
+              onClick={() => onSave(look.id)}
+              data-testid={`button-save-${look.id}`}
+              className={`focus-ring inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold ${savedLooks.includes(look.id) ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary'}`}
+            >
+              {savedLooks.includes(look.id) ? <Check size={14} /> : <Heart size={14} />} {savedLooks.includes(look.id) ? 'Saved' : 'Save'}
+            </button>
+          </div>
         </div>
       </article>;
     })}</div>
-    {hasMore && <div className="mt-8 flex flex-col items-center gap-2">
-      {loadMoreError && <p className="text-xs font-semibold text-destructive">{loadMoreError}</p>}
-      <button type="button" onClick={onLoadMore} disabled={loadingMore} data-testid="button-load-more-dresses" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-6 py-3 text-sm font-bold hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-60">{loadingMore ? <RefreshCw size={15} className="animate-spin" /> : <ChevronDown size={15} />} {loadingMore ? 'Finding more…' : 'More dresses'}</button>
-    </div>}
-    {shopLinks.length > 0 && <div className="mt-14"><p className="text-xs font-bold uppercase tracking-[.18em] text-primary">Shop these online</p><h2 className="mt-2 font-serif text-3xl">More real stores worth a look.</h2>
-      <div className="mt-6 grid gap-3 sm:grid-cols-2">{shopLinks.map((link) => <a key={link.url} href={link.url} target="_blank" rel="noreferrer" data-testid={`link-shop-${link.siteName.toLowerCase()}`} className="focus-ring flex items-center justify-between gap-3 rounded-2xl border border-border bg-card p-4 transition hover:-translate-y-0.5 hover:border-primary/45">
-        <span className="min-w-0"><span className="block truncate font-semibold">{link.title}</span><span className="text-xs font-bold uppercase tracking-[.1em] text-muted-foreground">{link.siteName}</span></span>
-        {link.price && <span className="shrink-0 rounded-full bg-secondary px-3 py-1 text-xs font-bold">{link.price}</span>}
-      </a>)}</div>
-    </div>}
-    <div className="mt-10 rounded-2xl border border-border bg-secondary/55 p-5 text-sm text-muted-foreground"><div className="flex items-start gap-3"><Info size={17} className="mt-0.5 shrink-0 text-primary" /><p>These are real, purchasable pieces found from real stores — availability, price, and sizing can change on the store's own site. "Try this on" shows a visualisation of you wearing it; always confirm details before buying.</p></div></div>
+    <div className="mt-10 rounded-2xl border border-border bg-secondary/55 p-5 text-sm text-muted-foreground"><div className="flex items-start gap-3"><Info size={17} className="mt-0.5 shrink-0 text-primary" /><p>Style visualisation — actual fit, fabric fall and real-world colour may vary. These looks are starting points shaped around your answers; keep what feels like you, skip what doesn’t, and tell us what to change.</p></div></div>
   </div></Shell>;
 }
 
-/**
- * Preview step between the grid and the actual try-on generation — added
- * per direct user request: tapping a card used to trigger try-on
- * immediately with no confirmation, which made it easy to accidentally
- * generate the wrong dress in a grid of similar-looking pieces (a real,
- * live-reported mismatch: the user believed they'd picked a black outfit
- * but the try-on came back on an ivory one — the most likely explanation
- * is an accidental click on a neighbouring card, since there was no
- * intermediate screen to catch it). This shows the dress full-size with
- * its real title/site before the (slow, ~2 minute) generation call runs,
- * so the user can visually confirm this is genuinely the piece they meant
- * before committing to it.
- */
-function DressDetail({ dress, onBack, onTryOn }: {
-  dress: DressResult; onBack: () => void; onTryOn: () => void;
-}) {
-  return <div className="noise min-h-[100dvh]"><Header onBack={onBack} onSettings={onBack} /><main className="mx-auto max-w-5xl px-4 py-8 sm:px-8 sm:py-14"><div className="grid gap-8 lg:grid-cols-[1fr_.85fr] lg:items-start">
-    <div className="relative min-h-[420px] overflow-hidden rounded-[1.4rem] bg-[#e4d6c4]">
-      <img src={dress.imageUrl} alt={dress.title} className="size-full object-cover" />
-    </div>
-    <div className="animate-rise lg:pt-4">
-      <p className="text-xs font-bold uppercase tracking-[.18em] text-primary">{dress.siteName}</p>
-      <h1 className="mt-4 font-serif text-[clamp(2.2rem,5vw,3.4rem)] leading-[.98] tracking-[-.03em]">{dress.title}</h1>
-      <p className="mt-5 text-sm leading-relaxed text-muted-foreground">A real piece from {dress.siteName}. Confirm this is the one you want, then try it on — this uses your uploaded photo and takes about a minute.</p>
-      <div className="mt-8 flex flex-wrap gap-3">
-        <button type="button" onClick={onTryOn} data-testid="button-confirm-try-on" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-5 py-3 text-sm font-bold text-primary-foreground"><Wand2 size={16} /> Try this on</button>
-        <a href={dress.sourceUrl} target="_blank" rel="noreferrer" data-testid="button-visit-store" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold hover:border-primary/50">Visit {dress.siteName}</a>
-      </div>
-    </div>
-  </div></main></div>;
+/** Triggers a browser download of a data-URL image (works for base64 data: URLs; a same-origin http(s) URL would need a fetch+blob step instead). */
+function downloadLookImage(imageUrl: string, title: string) {
+  const link = document.createElement('a');
+  link.href = imageUrl;
+  link.download = `skintune-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.jpg`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
-function TryOn({ dress, profile, imageUrl, loading, error, saved, onSave, onBack, onTryAnother, onRetry }: {
-  dress: DressResult; profile: SkinTuneProfile; imageUrl: string; loading: boolean; error: string; saved: boolean;
-  onSave: () => void; onBack: () => void; onTryAnother: () => void; onRetry: () => void;
+function LookDetail({ look, profile, saved, onSave, onBack, onFeedback, onRefined }: {
+  look: LookRecommendation; profile: SkinTuneProfile; saved: boolean;
+  onSave: () => void; onBack: () => void; onFeedback: () => void; onRefined: (look: LookRecommendation) => void;
 }) {
-  return <div className="noise min-h-[100dvh]"><Header onBack={onBack} onSettings={onBack} /><main className="mx-auto max-w-5xl px-4 py-8 sm:px-8 sm:py-14"><div className="grid gap-8 lg:grid-cols-[1fr_.85fr] lg:items-start">
+  const [showRetry, setShowRetry] = useState(false);
+  const [customization, setCustomization] = useState('');
+  const [refining, setRefining] = useState(false);
+  const [refineError, setRefineError] = useState('');
+  const hasImage = hasRealImage(look.imageUrl);
+
+  const submitRetry = async () => {
+    if (!customization.trim()) return;
+    setRefining(true);
+    setRefineError('');
+    try {
+      const refined = await refineLookImage(look, profile, { occasion: profile.occasion, details: '' }, customization.trim());
+      onRefined(refined);
+      setShowRetry(false);
+      setCustomization('');
+    } catch (err) {
+      setRefineError('That retry didn’t go through. Please try again.');
+      console.warn('Refine failed:', err);
+    } finally {
+      setRefining(false);
+    }
+  };
+
+  const pronouns = (profile.pronouns || '').toLowerCase();
+  const age = (profile.ageGroup || '').toLowerCase();
+  const isChild =
+    age.includes('kids') ||
+    age.includes('0–12') ||
+    age.includes('0-12') ||
+    age.includes('child') ||
+    pronouns.includes('kids') ||
+    pronouns.includes('children');
+  const isMan = !isChild && pronouns.includes('men');
+
+  return <div className="noise min-h-[100dvh]"><Header onBack={onBack} onSettings={onBack} /><main className="mx-auto max-w-6xl px-4 py-8 sm:px-8 sm:py-14"><div className="grid gap-8 lg:grid-cols-[.9fr_1.1fr] lg:items-start">
     <div>
-      <div className="relative min-h-[420px] overflow-hidden rounded-[1.4rem] bg-[#e4d6c4]">
-        {imageUrl ? <img src={imageUrl} alt={`You wearing ${dress.title}`} className="size-full object-cover" /> : <div className="absolute inset-0 grid place-items-center">
-          {loading ? <div className="flex flex-col items-center gap-3 text-center" data-testid="text-try-on-loading"><span className="relative grid size-11 place-items-center"><span className="absolute inset-0 animate-ping rounded-full bg-primary/40" /><span className="relative grid size-11 place-items-center rounded-full bg-primary text-primary-foreground"><RefreshCw size={18} className="animate-spin" /></span></span><p className="max-w-[220px] text-sm font-semibold text-foreground/80">Trying this on for you…</p></div>
-            : error ? <div className="flex flex-col items-center gap-3 px-6 text-center"><p className="text-sm font-semibold text-destructive">{error}</p><button type="button" onClick={onRetry} data-testid="button-retry-try-on" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground"><RefreshCw size={15} /> Try again</button></div>
-            : null}
-        </div>}
-      </div>
+      <LookVisual look={look} large />
+      {hasImage && <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" onClick={() => downloadLookImage(look.imageUrl, look.title)} data-testid="button-download-image" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-bold hover:border-primary/50"><Download size={15} /> Download image</button>
+        <button type="button" onClick={() => setShowRetry((v) => !v)} data-testid="button-retry-look" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-bold hover:border-primary/50"><Wand2 size={15} /> Retry with changes</button>
+      </div>}
+      {showRetry && <div className="mt-4 animate-rise rounded-2xl border border-primary/25 bg-primary/5 p-5" data-testid="panel-retry-customization">
+        <p className="text-sm font-bold">What should we change about this image?</p>
+        <p className="mt-1 text-xs text-muted-foreground">We'll keep the same look and the same you, just apply this correction — e.g. "make the sleeves longer" or "different shoe colour".</p>
+        <textarea value={customization} onChange={(e) => setCustomization(e.target.value)} data-testid="textarea-retry-customization" rows={3} placeholder="Make the sleeves longer, and a lighter shade of the same colour." className="focus-ring mt-3 w-full resize-none rounded-2xl border border-border bg-card p-4 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/55" />
+        {refineError && <p className="mt-2 text-xs font-semibold text-destructive">{refineError}</p>}
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button type="button" onClick={submitRetry} disabled={!customization.trim() || refining} data-testid="button-submit-retry" className="focus-ring inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50">{refining ? <RefreshCw size={15} className="animate-spin" /> : <Wand2 size={15} />} {refining ? 'Regenerating…' : 'Regenerate this look'}</button>
+          <button type="button" onClick={() => { setShowRetry(false); setCustomization(''); setRefineError(''); }} disabled={refining} data-testid="button-cancel-retry" className="focus-ring rounded-full px-4 py-2.5 text-sm font-bold text-muted-foreground hover:bg-secondary">Cancel</button>
+        </div>
+      </div>}
     </div>
     <div className="animate-rise lg:pt-4">
-      <p className="text-xs font-bold uppercase tracking-[.18em] text-primary">{dress.siteName}</p>
-      <h1 className="mt-4 font-serif text-[clamp(2.2rem,5vw,3.4rem)] leading-[.98] tracking-[-.03em]">{dress.title}</h1>
-      <p className="mt-5 text-sm leading-relaxed text-muted-foreground">A real piece from {dress.siteName}, shown on your own photo. Fit, fabric fall, and real-world colour may vary from the photo.</p>
-      <div className="mt-8 flex flex-wrap gap-3">
-        <a href={dress.sourceUrl} target="_blank" rel="noreferrer" data-testid="button-interested" className={`focus-ring inline-flex items-center gap-2 rounded-full px-5 py-3 text-sm font-bold ${imageUrl ? 'bg-primary text-primary-foreground' : 'pointer-events-none bg-secondary text-muted-foreground'}`}><Heart size={16} /> Interested — visit {dress.siteName}</a>
-        <button type="button" onClick={onTryAnother} data-testid="button-try-another" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold hover:border-primary/50"><X size={16} /> Not this one — try another</button>
+      <p className="text-xs font-bold uppercase tracking-[.18em] text-primary">The complete look</p>
+      <h1 className="mt-4 font-serif text-[clamp(3rem,7vw,6rem)] leading-[.86] tracking-[-.05em]">{look.title}</h1>
+      <p className="mt-6 max-w-md text-lg leading-relaxed text-muted-foreground">{look.note}</p>
+      <div className="mt-7 flex items-center gap-3"><div className="flex gap-2">{look.palette.map((color) => <span key={color} className="size-8 rounded-full border-2 border-card shadow-sm" style={{ backgroundColor: color }} />)}</div><span className="rounded-full bg-secondary px-3 py-1.5 text-xs font-bold">{look.confidence}% confidence</span></div>
+      <div className="mt-10 grid gap-3 sm:grid-cols-2">
+        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">👗 Outfit</p><p className="mt-2 font-semibold">{look.outfit}</p></div>
+        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">🎨 Colour</p><p className="mt-2 font-semibold">{look.outfitColor}</p></div>
+        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{isChild ? '🧸 Accessories' : isMan ? '⌚ Watches & Accessories' : '💎 Jewellery'}</p><p className="mt-2 font-semibold">{isChild ? look.accessories : look.jewellery}</p></div>
+        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">💇 Hairstyle & Grooming</p><p className="mt-2 font-semibold">{look.hairstyle}</p></div>
+        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{isChild ? '☀️ Skin' : isMan ? '✨ Grooming' : '💄 Makeup'}</p><p className="mt-2 font-semibold">{isChild ? 'Child-friendly natural skin (no cosmetics)' : isMan ? (look.makeup || 'Clean natural grooming') : look.makeup}</p></div>
+        <div className="rounded-2xl border border-border bg-card p-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">👠 Footwear</p><p className="mt-2 font-semibold">{look.footwear}</p></div>
+        <div className="rounded-2xl border border-border bg-card p-4 sm:col-span-2"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">👜 Accessories</p><p className="mt-2 font-semibold">{look.accessories}</p></div>
       </div>
-      {imageUrl && <button type="button" onClick={onSave} data-testid="button-save-tryon" className={`focus-ring mt-3 inline-flex items-center gap-2 rounded-full px-5 py-3 text-sm font-bold ${saved ? 'bg-secondary' : 'border border-border bg-card hover:border-primary/50'}`}>{saved ? <Check size={16} /> : <Save size={16} />} {saved ? 'Saved to your journal' : 'Save this'}</button>}
+      <div className="mt-8 rounded-2xl border border-accent/25 bg-accent/7 p-5"><p className="font-serif text-2xl">Why SkinTune chose this</p><ul className="mt-4 grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">{look.reasoning.map((reason) => <li key={reason} className="flex gap-2"><Check size={16} className="mt-0.5 shrink-0 text-accent" /> {reason}</li>)}</ul></div>
+      <div className="mt-6 divide-y divide-border border-y border-border">{look.pieces.map((piece) => <div key={piece.category} className="grid grid-cols-[72px_1fr] gap-4 py-4"><p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{piece.category}</p><div><p className="font-semibold">{piece.name}</p><p className="mt-1 text-sm leading-relaxed text-muted-foreground">{piece.detail}</p></div></div>)}</div>
+      <p className="mt-5 text-xs leading-relaxed text-muted-foreground">Style visualisation — actual fit, fabric fall and real-world colour may vary.</p>
+      <div className="mt-8 flex flex-wrap gap-3"><button type="button" onClick={onSave} data-testid="button-detail-save" className={`focus-ring inline-flex items-center gap-2 rounded-full px-5 py-3 text-sm font-bold ${saved ? 'bg-secondary' : 'bg-primary text-primary-foreground'}`}>{saved ? <Check size={16} /> : <Save size={16} />} {saved ? 'Saved to your journal' : 'Save this look'}</button><button type="button" onClick={onFeedback} data-testid="button-detail-not-for-me" className="focus-ring inline-flex items-center gap-2 rounded-full border border-border bg-card px-5 py-3 text-sm font-bold hover:border-primary/50"><X size={16} /> Not my style</button></div>
     </div>
-  </div></main></div>;
+  </div>
+  {/* Real Product Shopping Section */}
+  <ShopLookSection look={look} profile={profile} />
+  </main></div>;
+}
+
+function Feedback({ feeling, setFeeling, changeAreas, toggleChangeArea, request, setRequest, onBack, onDone }: {
+  feeling: string; setFeeling: (v: string) => void; changeAreas: string[]; toggleChangeArea: (v: string) => void;
+  request: string; setRequest: (v: string) => void; onBack: () => void; onDone: () => void;
+}) {
+  const notMyStyle = feeling === 'Not my style';
+  return <div className="noise min-h-[100dvh]"><Header onBack={onBack} onSettings={onBack} /><main className="mx-auto max-w-2xl px-4 py-12 sm:px-8 sm:py-20"><Intro eyebrow="A better next edit" title="How did this land?" body="Your honest reaction helps us keep your taste at the center.">
+    <div className="grid gap-3 sm:grid-cols-2">{feedbackFeelingOptions.map((item) => <OptionCard key={item.label} label={item.label} icon={item.icon} selected={feeling === item.label} onClick={() => setFeeling(feeling === item.label ? '' : item.label)} />)}</div>
+    {notMyStyle && <div className="mt-8 animate-rise" data-testid="panel-what-to-change"><p className="mb-3 text-sm font-bold">What should we change?</p><div className="grid gap-3 sm:grid-cols-2">{feedbackChangeOptions.map((item) => <OptionCard key={item.label} label={item.label} icon={item.icon} selected={changeAreas.includes(item.label)} onClick={() => toggleChangeArea(item.label)} />)}</div></div>}
+    <label className="mt-7 block"><span className="mb-2 block text-sm font-bold">Anything else? <span className="font-normal text-muted-foreground">optional</span></span><textarea value={request} onChange={(e) => setRequest(e.target.value)} data-testid="textarea-change-request" rows={4} placeholder="More relaxed, fewer layers, a little brighter…" className="focus-ring w-full resize-none rounded-2xl border border-border bg-card p-4 outline-none placeholder:text-muted-foreground/55" /></label>
+    <FooterActions onBack={onBack} onContinue={onDone} disabled={!feeling} label={notMyStyle ? '🔄 Create New Looks' : 'Save feedback'} />
+  </Intro></main></div>;
 }
 
 function Settings({ profile, onBack, onDelete, deletedNotice }: { profile: SkinTuneProfile; onBack: () => void; onDelete: () => void; deletedNotice: boolean }) {
@@ -688,214 +720,50 @@ function Settings({ profile, onBack, onDelete, deletedNotice }: { profile: SkinT
 
 // ---------- Root app ----------
 
-const DRESS_PAGE_SIZE = 10;
-
 function SkinTune() {
   const [screen, setScreen] = useState<Screen>(() => localStorage.getItem('skintune-profile') ? 'home' : 'welcome');
   const [profile, setProfile] = useState<SkinTuneProfile>(() => { try { return { ...initialProfile, ...JSON.parse(localStorage.getItem('skintune-profile') || '{}') }; } catch { return initialProfile; } });
-  const [savedDresses, setSavedDresses] = useState<SavedDress[]>(() => { try { return JSON.parse(localStorage.getItem('skintune-saved-looks') || '[]'); } catch { return []; } });
+  const [detailId, setDetailId] = useState('look-01');
+  const [savedLooks, setSavedLooks] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem('skintune-saved-looks') || '[]'); } catch { return []; } });
+  const [feeling, setFeeling] = useState('');
+  const [changeAreas, setChangeAreas] = useState<string[]>([]);
+  const [changeRequest, setChangeRequest] = useState('');
+  const [generatedLooks, setGeneratedLooks] = useState<LookRecommendation[]>([]);
   const [deletedNotice, setDeletedNotice] = useState(false);
-
-  // Real-dress-search state: the current page of results, "shop these
-  // online" links (fetched once alongside the first page), whether another
-  // page is worth loading, and the dress currently being tried on.
-  const [dresses, setDresses] = useState<DressResult[]>([]);
-  const [shopLinks, setShopLinks] = useState<ShopLink[]>([]);
-  const [hasMoreDresses, setHasMoreDresses] = useState(false);
-  const [loadingMoreDresses, setLoadingMoreDresses] = useState(false);
-  const [selectedDress, setSelectedDress] = useState<DressResult | null>(null);
-  const [tryOnImageUrl, setTryOnImageUrl] = useState('');
-  const [tryOnLoading, setTryOnLoading] = useState(false);
-  const [tryOnError, setTryOnError] = useState('');
-  const [searchError, setSearchError] = useState('');
-  const [searchAttempt, setSearchAttempt] = useState(0);
-  const [searchSteps, setSearchSteps] = useState<LogStep[]>(() => SEARCH_STEPS.map((label) => ({ label, status: 'pending' })));
-  const [loadMoreError, setLoadMoreError] = useState('');
-
-  // Personal avatar (real-dress-avatar-intelligent-tryon branch) — see
-  // services/avatar.ts. `avatar` is the currently active avatar image, read
-  // once from localStorage on mount so a returning user with an existing
-  // avatar skips creation entirely (this branch's "do NOT create avatar on
-  // every login" rule) — the 'generating' effect below only calls
-  // avatarService.createAvatar() when this is still null.
-  const [avatar, setAvatar] = useState<avatarService.Avatar | null>(() => avatarService.getActiveAvatar());
-  const [avatarError, setAvatarError] = useState('');
-  // Session memory (this branch's product spec, sections 21-27) — what's
-  // been shown/liked/rejected THIS shopping session, feeding "Research
-  // Again"/"Refine Search" so they steer away from repeats. Deliberately
-  // reset to empty on every fresh search (see the 'generating' effect),
-  // never persisted — a shopping session is explicitly temporary.
-  const [sessionMemory, setSessionMemory] = useState<SessionMemory>(createEmptySessionMemory());
-  const [researchingAgain, setResearchingAgain] = useState(false);
-  const [refining, setRefining] = useState(false);
-  const [refinementText, setRefinementText] = useState('');
 
   const update = (patch: Partial<SkinTuneProfile>) => setProfile((old) => ({ ...old, ...patch }));
   const index = wizardScreens.indexOf(screen);
   const go = (next: Screen) => { setScreen(next); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-  const back = () => { if (screen === 'try-on') go('dress-detail'); else if (screen === 'dress-detail') go('dresses'); else if (index > 0) go(wizardScreens[index - 1]); else go(profile.name ? 'home' : 'welcome'); };
+  const back = () => { if (screen === 'detail' || screen === 'feedback') go('results'); else if (index > 0) go(wizardScreens[index - 1]); else go(profile.name ? 'home' : 'welcome'); };
   const saveProfile = () => { localStorage.setItem('skintune-profile', JSON.stringify(profile)); go('generating'); };
   const openSettings = () => go(profile.name ? 'settings' : 'welcome');
-
-  const viewDress = (dress: DressResult) => {
-    setSelectedDress(dress);
-    go('dress-detail');
-  };
-
-  const runTryOn = (dress: DressResult) => {
-    setSelectedDress(dress);
-    setTryOnImageUrl('');
-    setTryOnError('');
-    // Reusing the active avatar (see services/avatar.ts) instead of the raw
-    // uploaded selfie is this branch's core "avatar reuse" requirement — if
-    // it's somehow still missing at this point (avatar creation failed
-    // earlier, or the user reached try-on via some path that skipped it),
-    // fail loudly here rather than silently falling back to profile.photoUrl,
-    // since that fallback is exactly the "ask for a selfie every time"
-    // behavior this feature exists to remove.
-    if (!avatar) {
-      setTryOnError('Your personal avatar is not ready yet. Please go back and create it first.');
-      go('try-on');
-      return;
-    }
-    setTryOnLoading(true);
-    go('try-on');
-    console.log(`[SkinTune] Starting try-on: "${dress.title}" from ${dress.siteName}`);
-    tryOnDress(dress, profile, avatar.imageUrl)
-      .then((imageUrl) => { console.log('[SkinTune] Try-on complete.'); setTryOnImageUrl(imageUrl); })
-      .catch((err) => {
-        const detail = err instanceof Error ? err.message : String(err);
-        console.error('[SkinTune] Try-on failed:', detail);
-        setTryOnError(detail);
-      })
-      .finally(() => setTryOnLoading(false));
-  };
-
-  const handleInterested = (dress: DressResult) => {
-    setSessionMemory((old) => recordInterested(old, dress));
-    void sendProductFeedback(dress, 'INTERESTED');
-  };
-  const handleNotInterested = (dress: DressResult, reason?: string) => {
-    setSessionMemory((old) => recordRejected(old, dress, reason));
-    void sendProductFeedback(dress, 'NOT_INTERESTED', reason);
-  };
-
-  const runResearchAgain = () => {
-    setResearchingAgain(true);
-    setLoadMoreError('');
-    researchAgain(profile, sessionMemory, DRESS_PAGE_SIZE)
-      .then((page) => {
-        setDresses(page.results);
-        setShopLinks(page.shopLinks);
-        setHasMoreDresses(page.hasMore);
-        setSessionMemory((old) => recordSeen(old, page.results));
-      })
-      .catch((err) => { const detail = err instanceof Error ? err.message : String(err); console.error('[SkinTune] Research again failed:', detail); setLoadMoreError(detail); })
-      .finally(() => setResearchingAgain(false));
-  };
-
-  const runRefineSearch = (refinement: string) => {
-    setRefining(true);
-    setLoadMoreError('');
-    refineSearch(profile, sessionMemory, refinement, DRESS_PAGE_SIZE)
-      .then((page) => {
-        setDresses(page.results);
-        setShopLinks(page.shopLinks);
-        setHasMoreDresses(page.hasMore);
-        setSessionMemory((old) => recordSeen(old, page.results));
-        setRefinementText('');
-      })
-      .catch((err) => { const detail = err instanceof Error ? err.message : String(err); console.error('[SkinTune] Refine search failed:', detail); setLoadMoreError(detail); })
-      .finally(() => setRefining(false));
-  };
+  const toggleChangeArea = (v: string) => setChangeAreas((old) => old.includes(v) ? old.filter((item) => item !== v) : [...old, v]);
 
   useEffect(() => {
     if (screen !== 'generating') return;
     let active = true;
-    setSearchError('');
-    setAvatarError('');
-    setSearchSteps(SEARCH_STEPS.map((label) => ({ label, status: 'pending' })));
-    const log = createActivityLog(SEARCH_STEPS, (steps) => { if (active) setSearchSteps(steps); });
-    console.log('[SkinTune] Starting dress search for profile:', profile.occasion || '(no occasion)', profile.style);
-    log.start('Reading your profile');
-    log.done('Reading your profile'); // synthetic — no separate network call, just marks the checklist's first row complete immediately
-
-    // Avatar creation/reuse — this branch's core "avatar reuse" requirement
-    // (see this file's App-level doc comment history / CLAUDE.md): a
-    // returning user with an already-created avatar (read once on mount —
-    // see the `avatar` useState initializer) skips creation ENTIRELY here,
-    // going straight to search. Only a first-time user (or one whose
-    // profile.photoUrl changed since the avatar was made — see the `!avatar`
-    // check) triggers a real POST /api/avatar/create call, and even then
-    // only ONCE per profile, never per dress (that's the whole point).
-    const ensureAvatar = avatar
-      ? Promise.resolve(avatar)
-      : avatarService.createAvatar(profile.photoUrl, profile).then((created) => {
-          if (!active) return created;
-          avatarService.saveAsFirstVersion(created);
-          setAvatar(created);
-          return created;
-        });
-
-    ensureAvatar
-      .catch((err) => {
-        // Avatar creation failing should NOT block dress search — the user
-        // can still browse and see real dresses; they just can't try one
-        // on until the avatar issue is resolved (surfaced on the dresses
-        // screen via avatarError, not as a hard blocker here).
-        const detail = err instanceof Error ? err.message : String(err);
-        console.error('[SkinTune] Avatar creation failed:', detail);
-        if (active) setAvatarError(detail);
-        return null;
-      })
-      .then(() =>
-        searchDresses(profile, 0, DRESS_PAGE_SIZE, log)
-          .then((page) => {
-            if (!active) return;
-            console.log(`[SkinTune] Search complete: ${page.results.length} dresses, ${page.shopLinks.length} shop links, hasMore=${page.hasMore}`);
-            setDresses(page.results);
-            setShopLinks(page.shopLinks);
-            setHasMoreDresses(page.hasMore);
-            setSessionMemory(createEmptySessionMemory());
-            setSessionMemory((old) => recordSeen(old, page.results));
-            go('dresses');
-          })
-          .catch((err) => {
-            if (!active) return;
-            const detail = err instanceof Error ? err.message : String(err);
-            console.error('[SkinTune] Dress search failed:', detail);
-            setSearchError(detail);
-          }),
-      );
+    getLookRecommendations(profile)
+      .then((recommendations) => generateLookImages(recommendations, profile, { occasion: profile.occasion, details: '' }))
+      .then((result) => { if (active) { setGeneratedLooks(result); go('results'); } });
     return () => { active = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: search begins once per entry into this screen (searchAttempt bumps to retry)
-  }, [screen, searchAttempt]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: generation begins once per entry into this screen
+  }, [screen]);
 
-  useEffect(() => { localStorage.setItem('skintune-saved-looks', JSON.stringify(savedDresses)); }, [savedDresses]);
+  useEffect(() => { localStorage.setItem('skintune-saved-looks', JSON.stringify(savedLooks)); }, [savedLooks]);
 
-  const isDressSaved = (dressId: string) => savedDresses.some((item) => item.dress.id === dressId);
+  const currentLook = useMemo(() => generatedLooks.find((item) => item.id === detailId) || generatedLooks[0], [generatedLooks, detailId]);
 
-  if (screen === 'welcome') return <Welcome onStart={() => go('name')} onPrivacy={() => go('settings')} />;
-  if (screen === 'home') return <Home profile={profile} savedDresses={savedDresses} onNew={() => { update({ photoUrl: '' }); go('name'); }} onResults={() => go(dresses.length ? 'dresses' : 'generating')} onSettings={openSettings} onQuickStart={(occasion) => { update({ occasion }); go('final-prefs'); }} />;
+  if (screen === 'welcome') return <Welcome onStart={() => go('name')} onPrivacy={() => go('settings')} onQuickStart={(occasion) => { update({ occasion }); go(profile.name ? 'final-prefs' : 'name'); }} hasExistingProfile={Boolean(profile.name)} onGoHome={() => go('home')} />;
+  if (screen === 'home') return <Home profile={profile} savedLooks={savedLooks} generatedLooks={generatedLooks} onNew={() => { update({ photoUrl: '' }); go('name'); }} onResults={() => go(generatedLooks.length ? 'results' : 'generating')} onSettings={openSettings} onLook={(id) => { setDetailId(id); go('detail'); }} onQuickStart={(occasion) => { update({ occasion }); go('final-prefs'); }} onDiscover={() => go('welcome')} />;
   if (screen === 'settings') return <Settings profile={profile} deletedNotice={deletedNotice} onBack={() => go(profile.name ? 'home' : 'welcome')} onDelete={() => { localStorage.removeItem('skintune-profile'); localStorage.removeItem('skintune-saved-looks'); localStorage.removeItem('skintune-feedback'); setProfile(initialProfile); setDeletedNotice(true); setTimeout(() => go('welcome'), 900); }} />;
   if (screen === 'photo') return <PhotoPanel profile={profile} update={update} onContinue={() => go('appearance')} onBack={back} />;
-  if (screen === 'dresses') return <DressGrid profile={profile} dresses={dresses} shopLinks={shopLinks} hasMore={hasMoreDresses} loadingMore={loadingMoreDresses} loadMoreError={loadMoreError} onViewDress={viewDress} onLoadMore={() => {
-    setLoadingMoreDresses(true);
-    setLoadMoreError('');
-    searchDresses(profile, dresses.length, DRESS_PAGE_SIZE)
-      .then((page) => { setDresses((old) => [...old, ...page.results]); setHasMoreDresses(page.hasMore); setSessionMemory((old) => recordSeen(old, page.results)); })
-      .catch((err) => { const detail = err instanceof Error ? err.message : String(err); console.error('[SkinTune] Load more dresses failed:', detail); setLoadMoreError(detail); })
-      .finally(() => setLoadingMoreDresses(false));
-  }} onBack={() => go('home')}
-    interestedTitles={sessionMemory.interested} rejectedTitles={sessionMemory.rejected.map((r) => r.title)}
-    onInterested={handleInterested} onNotInterested={handleNotInterested}
-    onResearchAgain={runResearchAgain} researchingAgain={researchingAgain}
-    onRefine={runRefineSearch} refining={refining} refinementText={refinementText} onRefinementTextChange={setRefinementText}
-    avatarError={avatarError}
-  />;
-  if (screen === 'dress-detail' && selectedDress) return <DressDetail dress={selectedDress} onBack={back} onTryOn={() => runTryOn(selectedDress)} />;
-  if (screen === 'try-on' && selectedDress) return <TryOn dress={selectedDress} profile={profile} imageUrl={tryOnImageUrl} loading={tryOnLoading} error={tryOnError} saved={isDressSaved(selectedDress.id)} onSave={() => setSavedDresses((old) => isDressSaved(selectedDress.id) ? old.filter((item) => item.dress.id !== selectedDress.id) : [...old, { dress: selectedDress, imageUrl: tryOnImageUrl }])} onBack={back} onTryAnother={() => go('dresses')} onRetry={() => runTryOn(selectedDress)} />;
-  if (screen === 'generating') return <Generating steps={searchSteps} error={searchError} onRetry={() => setSearchAttempt((v) => v + 1)} onBack={() => go(profile.name ? 'home' : 'welcome')} />;
+  if (screen === 'results') return <Results profile={profile} looks={generatedLooks} savedLooks={savedLooks} onSave={(id) => setSavedLooks((old) => old.includes(id) ? old.filter((item) => item !== id) : [...old, id])} onLook={(id) => { setDetailId(id); go('detail'); }} onFeedback={() => go('feedback')} onBack={() => go('home')} />;
+  if (screen === 'detail' && currentLook) return <LookDetail look={currentLook} profile={profile} saved={savedLooks.includes(currentLook.id)} onSave={() => setSavedLooks((old) => old.includes(currentLook.id) ? old.filter((item) => item !== currentLook.id) : [...old, currentLook.id])} onBack={back} onFeedback={() => go('feedback')} onRefined={(refined) => setGeneratedLooks((old) => old.map((item) => item.id === refined.id ? refined : item))} />;
+  if (screen === 'feedback') return <Feedback feeling={feeling} setFeeling={setFeeling} changeAreas={changeAreas} toggleChangeArea={toggleChangeArea} request={changeRequest} setRequest={setChangeRequest} onBack={back} onDone={() => {
+    localStorage.setItem('skintune-feedback', JSON.stringify({ feeling, changeAreas, changeRequest }));
+    if (feeling === 'Not my style') { setFeeling(''); setChangeAreas([]); setChangeRequest(''); go('generating'); } else { go('results'); }
+  }} />;
+  if (screen === 'generating') return <Generating />;
 
   const screenContent: Record<string, ReactNode> = {
     name: <NameStep profile={profile} update={update} onNext={() => go('profile')} onBack={back} />,
@@ -911,15 +779,17 @@ function SkinTune() {
         { kind: 'multi', field: 'style', label: 'Which style worlds pull you in?', hint: 'Choose as many as you like.', options: styleOptions },
       ]}
       onNext={() => go('colors-occasion')} onBack={back} />,
-    'colors-occasion': <SectionStep profile={profile} update={update} step={9} eyebrow="09 / colours & the moment" title="Colour and where you're headed." body="Everything you need for this look, in one go."
+    'colors-occasion': <SectionStep profile={profile} update={update} step={9} eyebrow="09 / colours & the moment" title="Colour, comfort, and where you're headed." body="Everything you need for this look, in one go."
       fields={[
         { kind: 'multi', field: 'colorsLove', label: 'Which colors do you reach for?', options: colorLoveOptions, max: 5 },
+        { kind: 'multi', field: 'colorsAvoid', label: 'Anything you tend to avoid?', options: colorAvoidOptions, required: false },
+        { kind: 'multi', field: 'restrictions', label: 'Anything we should work around?', options: restrictionOptions, required: false },
         { kind: 'single', field: 'occasion', label: 'Where are you getting dressed for?', options: occasionOptions },
       ]}
       onNext={() => go('final-prefs')} onBack={back} />,
-    'final-prefs': <SectionStep profile={profile} update={update} step={10} eyebrow="10 / the finishing touch" title="How you want to come across, and your budget." body="Last section — then we'll search real stores for pieces that match."
+    'final-prefs': <SectionStep profile={profile} update={update} step={10} eyebrow="10 / the finishing touch" title="How you want to come across, and your budget." body="Last section — then we'll make your five looks."
       fields={[
-        { kind: 'multi', field: 'impression', label: 'How do you want to come across?', options: impressionOptions, max: 2, required: false },
+        { kind: 'multi', field: 'impression', label: 'How do you want to come across?', options: impressionOptions, max: 2 },
         { kind: 'single', field: 'budget', label: 'What feels comfortable for this edit?', options: budgetOptions },
       ]}
       continueLabel="Review my edit"
@@ -934,12 +804,12 @@ function Review({ profile, onEdit, onSave, onBack }: { profile: SkinTuneProfile;
     { label: 'Appearance', value: `${profile.appearance.skinTone} · ${profile.appearance.undertone} undertone · ${profile.appearance.confidence}% confidence`, target: 'appearance' },
     { label: 'Profile', value: `${profile.pronouns} · ${profile.ageGroup}`, target: 'profile' },
     { label: 'Build, fit & style', value: `${profile.bodyBuild} · ${profile.fit}${profile.style.length ? ` · ${profile.style.join(', ')}` : ''}`, target: 'body-style' },
-    { label: 'Colours & moment', value: `Loves ${profile.colorsLove.join(', ')} · ${profile.occasion}`, target: 'colors-occasion' },
-    { label: 'Impression & budget', value: `${profile.impression.length ? `${profile.impression.join(', ')} · ` : ''}${profile.budget}`, target: 'final-prefs' },
+    { label: 'Colours & moment', value: `Loves ${profile.colorsLove.join(', ')}${profile.colorsAvoid.length ? ` · avoids ${profile.colorsAvoid.join(', ')}` : ''} · ${profile.occasion}`, target: 'colors-occasion' },
+    { label: 'Impression & budget', value: `${profile.impression.join(', ')} · ${profile.budget}`, target: 'final-prefs' },
   ];
-  return <StepShell profile={profile} onBack={onBack} step={11}><Intro eyebrow="11 / your edit, at a glance" title={`This sounds like ${profile.name}.`} body="Look it over, make any changes, then we'll search real stores for pieces that match.">
+  return <StepShell profile={profile} onBack={onBack} step={11}><Intro eyebrow="11 / your edit, at a glance" title={`This sounds like ${profile.name}.`} body="Look it over, make any changes, then we'll make five complete looks around it.">
     <div className="divide-y divide-border overflow-hidden rounded-[1.5rem] border border-border bg-card">{rows.map((row) => <div key={row.label} className="flex items-start justify-between gap-4 p-5"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[.13em] text-muted-foreground">{row.label}</p><p className="mt-1 line-clamp-2 text-sm leading-relaxed">{row.value}</p></div><button type="button" onClick={() => onEdit(row.target)} data-testid={`button-edit-${row.label.toLowerCase().replace(' ', '-')}`} className="focus-ring inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold text-primary hover:bg-secondary"><Pencil size={13} /> Edit</button></div>)}</div>
-    <FooterActions onBack={onBack} onContinue={onSave} label="✨ Find my dresses" />
+    <FooterActions onBack={onBack} onContinue={onSave} label="✨ Make my five looks" />
   </Intro></StepShell>;
 }
 
